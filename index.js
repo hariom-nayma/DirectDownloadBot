@@ -133,10 +133,37 @@ bot.onText(/\/plan/, (msg) => {
 
     const usageText = user.plan === 'free' ? `\nWeekly Usage: ${user.downloads_this_week}/3` : '';
 
-    const text = `📋 *Your Plan: ${user.plan.toUpperCase()}*\nExpiry: ${expiryText}${usageText}\n\n*Available Plans:*\n\n` +
-        `🥉 *Basic (₹79/mo)*\n✅ Unlimited Downloads\n✅ 1GB File Limit\n✅ 1 Parallel Download\n\n` +
-        `🥈 *Premium (₹99/mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n✅ 2 Parallel Downloads\n✅ Custom Captions\n\n` +
-        `🥇 *VIP (₹199/2mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n✅ 3 Parallel Downloads\n✅ Custom Captions\n✅ 3 Month Access`;
+const text = 
+`💎 *Your Current Plan*
+━━━━━━━━━━━━━━━
+📌 *Plan:* ${user.plan.toUpperCase()}
+⏳ *Expiry:* ${expiryText}
+📊 ${usageText}
+
+✨ *Upgrade Options*
+━━━━━━━━━━━━━━━
+
+🥉 *Basic* — ₹79 / month  
+✅ Unlimited downloads  
+📦 Up to *1 GB* per file  
+⚡ *1* parallel download  
+
+🥈 *Premium* — ₹99 / month  
+✅ Unlimited downloads  
+📦 Up to *2 GB* per file  
+⚡ *2* parallel downloads  
+📝 Custom captions  
+
+🥇 *VIP* — ₹199 / *3 months*  
+✅ Unlimited downloads  
+📦 Up to *2 GB* per file  
+⚡ *3* parallel downloads  
+📝 Custom captions  
+🔥 *3 months access*
+
+💬 To upgrade, use: /buy <plan>
+Example: \`/buy premium\`
+`;
 
     const opts = {
         parse_mode: 'Markdown',
