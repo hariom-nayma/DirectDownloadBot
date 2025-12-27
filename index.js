@@ -22,18 +22,20 @@ const bot = new TelegramBot(token, {
 
 const fluentFfmpeg = require('fluent-ffmpeg');
 const progress = require('progress-stream');
+const { getUser, updateUser, checkPlan } = require('./helpers');
 
-// --- Helper Functions ---
+// Admin ID from env
+const ADMIN_ID = process.env.ADMIN_ID;
 
-// Simple in-memory store for settings (use a DB for production)
-const userSettings = {};
 const activeJobs = {}; // Store { chatId: { controller, filePath, stream, ... } }
 
-function getSettings(chatId) {
-    if (!userSettings[chatId]) {
-        userSettings[chatId] = { max_size_gb: 2, screenshots: true }; // Default ON for testing
-    }
-    return userSettings[chatId];
+// Helper to get effective limits based on plan
+function getPlanLimits(plan) {
+    if (plan === 'free') return { max_gb: 1, bandwidth: 'Standard' };
+    if (plan === 'basic') return { max_gb: 1, bandwidth: 'Standard' };
+    if (plan === 'premium') return { max_gb: 2, bandwidth: 'High' };
+    if (plan === 'vip') return { max_gb: 2, bandwidth: 'High' }; // VIP duration is longer
+    return { max_gb: 1 };
 }
 
 
@@ -69,66 +71,75 @@ bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id, "Welcome! Send me a link to download.\nUse /settings to configure options.");
 });
 
-bot.onText(/\/help/, (msg) => {
-    bot.sendMessage(msg.chat.id, "Send a direct URL to download.\n/settings - Configure upload limit & screenshots.");
+bot.onText(/\/myid/, (msg) => {
+    bot.sendMessage(msg.chat.id, `Your ID: \`${msg.from.id}\``, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/settings/, (msg) => {
+bot.onText(/\/plan/, (msg) => {
     const chatId = msg.chat.id;
-    const settings = getSettings(chatId);
+    const user = checkPlan(chatId);
+
+    let expiryText = "Lifetime";
+    if (user.expiry) {
+        expiryText = new Date(user.expiry).toLocaleDateString();
+    }
+
+    const usageText = user.plan === 'free' ? `\nWeekly Usage: ${user.downloads_this_week}/3` : '';
+
+    const text = `📋 *Your Plan: ${user.plan.toUpperCase()}*\nExpiry: ${expiryText}${usageText}\n\n*Available Plans:*\n\n` +
+        `🥉 *Basic (₹79/mo)*\n✅ Unlimited Downloads\n✅ 1GB File Limit\n\n` +
+        `🥈 *Premium (₹99/mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n\n` +
+        `🥇 *VIP (₹199/2mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n✅ 2 Month Access`;
 
     const opts = {
+        parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
                 [
-                    { text: `Upload Limit: ${settings.max_size_gb}GB`, callback_data: 'toggle_limit' },
-                    { text: `Screenshots: ${settings.screenshots ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }
-                ]
+                    { text: "Buy Basic (₹79)", url: "https://t.me/clickme4it?text=I%20want%20to%20buy%20Basic%20Plan" },
+                    { text: "Buy Premium (₹99)", url: "https://t.me/clickme4it?text=I%20want%20to%20buy%20Premium%20Plan" }
+                ],
+                [
+                    { text: "Buy VIP (₹199)", url: "https://t.me/clickme4it?text=I%20want%20to%20buy%20VIP%20Plan" }
+                ],
+                [{ text: `Screenshots: ${user.screenshots !== false ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }]
             ]
         }
     };
-    bot.sendMessage(chatId, "Current Settings:", opts);
+    bot.sendMessage(chatId, text, opts);
+});
+
+// Admin Commands
+bot.onText(/\/up_(basic|premium|vip) (.+)/, (msg, match) => {
+    if (String(msg.from.id) !== String(ADMIN_ID)) return;
+
+    const plan = match[1];
+    const targetId = match[2].trim();
+
+    let durationDays = 30;
+    if (plan === 'vip') durationDays = 60;
+
+    const expiry = Date.now() + (durationDays * 24 * 60 * 60 * 1000);
+
+    updateUser(targetId, { plan: plan, expiry: expiry });
+    bot.sendMessage(msg.chat.id, `✅ User ${targetId} upgraded to ${plan.toUpperCase()} until ${new Date(expiry).toLocaleDateString()}`);
+    bot.sendMessage(targetId, `🎉 Your plan has been upgraded to *${plan.toUpperCase()}*!`, { parse_mode: 'Markdown' });
 });
 
 bot.on('callback_query', (callbackQuery) => {
     const msg = callbackQuery.message;
     const chatId = msg.chat.id;
     const data = callbackQuery.data;
-    const settings = getSettings(chatId);
+    const user = checkPlan(chatId);
 
-    if (data === 'toggle_limit') {
-        settings.max_size_gb = settings.max_size_gb === 2 ? 4 : 2;
+    if (data === 'toggle_screenshots') {
+        const newState = user.screenshots === false ? true : false; // Default true
+        updateUser(chatId, { screenshots: newState });
 
-        const opts = {
-            chat_id: chatId,
-            message_id: msg.message_id,
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: `Upload Limit: ${settings.max_size_gb}GB`, callback_data: 'toggle_limit' },
-                        { text: `Screenshots: ${settings.screenshots ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }
-                    ]
-                ]
-            }
-        };
-        bot.editMessageText("Current Settings (Updated):", opts);
+        bot.answerCallbackQuery(callbackQuery.id, { text: `Screenshots ${newState ? 'ON' : 'OFF'}` });
 
-    } else if (data === 'toggle_screenshots') {
-        settings.screenshots = !settings.screenshots;
-
-        const opts = {
-            chat_id: chatId,
-            message_id: msg.message_id,
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: `Upload Limit: ${settings.max_size_gb}GB`, callback_data: 'toggle_limit' },
-                        { text: `Screenshots: ${settings.screenshots ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }
-                    ]
-                ]
-            }
-        };
-        bot.editMessageText("Current Settings (Updated):", opts);
+        // Refresh Plan UI if called from /plan, but might require complex check. 
+        // Simple ack is enough for now.
 
     } else if (data === 'cancel_process') {
         const job = activeJobs[chatId];
@@ -185,7 +196,15 @@ bot.on('message', async (msg) => {
 
     // ...
 
-    const settings = getSettings(chatId);
+    // Check Plan Quota
+    const user = checkPlan(chatId);
+    const limits = getPlanLimits(user.plan);
+
+    if (user.plan === 'free' && user.downloads_this_week >= 3) {
+        bot.sendMessage(chatId, "⚠️ *Weekly Limit Reached* (3/3)\n\nUpgrade to /plan for Unlimited Downloads!", { parse_mode: 'Markdown' });
+        return;
+    }
+
     let statusMsg = await bot.sendMessage(chatId, "Initializing download...");
     let statusMsgId = statusMsg.message_id;
     let lastUpdate = Date.now();
@@ -195,7 +214,7 @@ bot.on('message', async (msg) => {
 
     try {
         const controller = new AbortController();
-        activeJobs[chatId] = { controller, filePath: null }; 
+        activeJobs[chatId] = { controller, filePath: null };
 
         const agent = new https.Agent({
             rejectUnauthorized: false, // Bypasses SSL errors (use with caution)
@@ -207,7 +226,7 @@ bot.on('message', async (msg) => {
             url: text,
             method: 'GET',
             responseType: 'stream',
-            timeout: 120000, 
+            timeout: 120000,
             signal: controller.signal,
             httpsAgent: agent,
             headers: {
@@ -243,10 +262,22 @@ bot.on('message', async (msg) => {
 
         filePath = path.join(downloadsDir, fileName);
         if (activeJobs[chatId]) activeJobs[chatId].filePath = filePath;
-        
+
         const writer = fs.createWriteStream(filePath);
 
         const totalLength = response.headers['content-length'];
+
+        // CHECK SIZE LIMIT
+        if (totalLength) {
+            const fileSizeGB = totalLength / (1024 * 1024 * 1024);
+            if (fileSizeGB > limits.max_gb) {
+                throw new Error(`File too large (${fileSizeGB.toFixed(2)} GB).\nYour Plan Limit: ${limits.max_gb} GB.\nUpgrade: /plan`);
+            }
+        }
+
+        // Increment usage if passed checks
+        updateUser(chatId, { downloads_this_week: user.downloads_this_week + 1 });
+
         let downloadedLength = 0;
         let startTime = Date.now();
 
@@ -330,55 +361,55 @@ bot.on('message', async (msg) => {
                 });
             });
 
-            // Generate extra screenshots if enabled and is video (Sequential for "Direct Dump")
-            if (videoMeta && settings.screenshots) {
+            // Generate extra screenshots if enabled and is video
+            if (videoMeta && user.screenshots !== false) {
                 if (videoMeta.duration > 0) {
-                     console.log("[Debug] Generating 9 screenshots (Manual Parallel)...");
-                     bot.editMessageText("Processing screenshots (Fast)...", { chat_id: chatId, message_id: statusMsgId }).catch(e=>{});
-                     
-                     // Helper to take ONE screenshot with fastSeek
-                     const takeShot = (percent) => {
-                         return new Promise((resolve) => {
-                             const timestamp = Math.floor(videoMeta.duration * percent / 100);
-                             const filename = `thumb-${percent}.jpg`;
-                             
-                             fluentFfmpeg()
-                                 .input(filePath)
-                                 .inputOptions([`-ss ${timestamp}`]) // Input seeking (FAST)
-                                 .output(path.join(downloadsDir, filename))
-                                 .frames(1)
-                                 .size('320x240')
-                                 .on('end', () => resolve(true))
-                                 .on('error', (e) => { 
-                                     console.error(`[Debug] Shot ${percent}% failed:`, e.message); 
-                                     resolve(false); 
-                                 })
-                                 .run();
-                         });
-                     };
+                    console.log("[Debug] Generating 9 screenshots (Manual Parallel)...");
+                    bot.editMessageText("Processing screenshots (Fast)...", { chat_id: chatId, message_id: statusMsgId }).catch(e => { });
 
-                     const percents = [10, 20, 30, 40, 50, 60, 70, 80, 90];
-                     // Run all 9 in parallel (input seeking is low CPU)
-                     await Promise.all(percents.map(p => takeShot(p)));
-                     
-                     const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
-                     // Sort by number to keep order
-                     files.sort((a,b) => {
-                         const nA = parseInt(a.match(/\d+/)[0]);
-                         const nB = parseInt(b.match(/\d+/)[0]);
-                         return nA - nB;
-                     });
+                    // Helper to take ONE screenshot with fastSeek
+                    const takeShot = (percent) => {
+                        return new Promise((resolve) => {
+                            const timestamp = Math.floor(videoMeta.duration * percent / 100);
+                            const filename = `thumb-${percent}.jpg`;
 
-                     const shots = files.map(f => path.join(downloadsDir, f));
-                     
-                     if (shots.length > 0) {
+                            fluentFfmpeg()
+                                .input(filePath)
+                                .inputOptions([`-ss ${timestamp}`]) // Input seeking (FAST)
+                                .output(path.join(downloadsDir, filename))
+                                .frames(1)
+                                .size('320x240')
+                                .on('end', () => resolve(true))
+                                .on('error', (e) => {
+                                    console.error(`[Debug] Shot ${percent}% failed:`, e.message);
+                                    resolve(false);
+                                })
+                                .run();
+                        });
+                    };
+
+                    const percents = [10, 20, 30, 40, 50, 60, 70, 80, 90];
+                    // Run all 9 in parallel (input seeking is low CPU)
+                    await Promise.all(percents.map(p => takeShot(p)));
+
+                    const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
+                    // Sort by number to keep order
+                    files.sort((a, b) => {
+                        const nA = parseInt(a.match(/\d+/)[0]);
+                        const nB = parseInt(b.match(/\d+/)[0]);
+                        return nA - nB;
+                    });
+
+                    const shots = files.map(f => path.join(downloadsDir, f));
+
+                    if (shots.length > 0) {
                         console.log(`[Debug] Sending ${shots.length} screenshots immediately.`);
                         const mediaGroup = shots.map(p => ({ type: 'photo', media: p }));
                         await bot.sendMediaGroup(chatId, mediaGroup.slice(0, 10));
                         // Cleanup screenshots
-                        shots.forEach(p => { try { fs.unlinkSync(p); } catch(e){} });
-                     }
-                 }
+                        shots.forEach(p => { try { fs.unlinkSync(p); } catch (e) { } });
+                    }
+                }
             }
 
         } catch (e) {
