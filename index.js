@@ -34,12 +34,13 @@ const runningJobs = {}; // { jobId: { chatId, controller, stream, filePath } }
 const userDownloads = {}; // { chatId: [jobId1, jobId2] }
 
 // Helper to get effective limits based on plan
+// Helper to get effective limits based on plan
 function getPlanLimits(plan) {
-    if (plan === 'free') return { max_gb: 1, parallel: 1 };
-    if (plan === 'basic') return { max_gb: 1, parallel: 1 };
-    if (plan === 'premium') return { max_gb: 2, parallel: 2 };
-    if (plan === 'vip') return { max_gb: 2, parallel: 3 };
-    return { max_gb: 1, parallel: 1 };
+    if (plan === 'free') return { max_gb: 1, parallel: 1, daily_limit_gb: 5 };
+    if (plan === 'basic') return { max_gb: 1, parallel: 1, daily_limit_gb: 15 };
+    if (plan === 'premium') return { max_gb: 2, parallel: 2, daily_limit_gb: 30 };
+    if (plan === 'vip') return { max_gb: 2, parallel: 3, daily_limit_gb: 50 };
+    return { max_gb: 1, parallel: 1, daily_limit_gb: 5 };
 }
 
 function formatBytes(bytes) {
@@ -133,8 +134,8 @@ bot.onText(/\/plan/, (msg) => {
 
     const usageText = user.plan === 'free' ? `\nWeekly Usage: ${user.downloads_this_week}/3` : '';
 
-const text = 
-`💎 *Your Current Plan*
+    const text =
+        `💎 *Your Current Plan*
 ━━━━━━━━━━━━━━━
 📌 *Plan:* ${user.plan.toUpperCase()}
 ⏳ *Expiry:* ${expiryText}
@@ -142,22 +143,31 @@ const text =
 
 ✨ *Upgrade Options*
 ━━━━━━━━━━━━━━━
+🆓 *Free* — ₹0 / month  
+✅ 3 Downloads/Week, 1GB Max
+📦 Up to *1 GB* per file  
+🌟 Daily Upload Limit: *5 GB*
+⚡ *1* parallel download  
+
 
 🥉 *Basic* — ₹79 / month  
 ✅ Unlimited downloads  
 📦 Up to *1 GB* per file  
+🌟 Daily Upload Limit: *15 GB*
 ⚡ *1* parallel download  
 
 🥈 *Premium* — ₹99 / month  
 ✅ Unlimited downloads  
 📦 Up to *2 GB* per file  
 ⚡ *2* parallel downloads  
+🌟 Daily Upload Limit: *30 GB*
 📝 Custom captions  
 
 🥇 *VIP* — ₹199 / *3 months*  
 ✅ Unlimited downloads  
 📦 Up to *2 GB* per file  
 ⚡ *3* parallel downloads  
+🌟 Daily Upload Limit: *50 GB*
 📝 Custom captions  
 🔥 *3 months access*
 
@@ -339,23 +349,14 @@ bot.on('message', async (msg) => {
     // Handle Photo (Custom Thumb)
     if (msg.photo && setupState[chatId] && setupState[chatId].state === 'WAITING_THUMB') {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
-        const file = await bot.getFile(fileId);
-        const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-
-        const thumbPath = path.join(downloadsDir, `custom_thumb_${chatId}.jpg`);
-        const writer = fs.createWriteStream(thumbPath);
 
         try {
-            const response = await axios({
-                url: fileUrl,
-                method: 'GET',
-                responseType: 'stream'
-            });
-            response.data.pipe(writer);
-            await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-            });
+            const savedPath = await bot.downloadFile(fileId, downloadsDir);
+            const thumbPath = path.join(downloadsDir, `custom_thumb_${chatId}.jpg`);
+
+            // Move/Rename safely
+            if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
+            fs.renameSync(savedPath, thumbPath);
 
             setupState[chatId].customThumb = thumbPath;
             setupState[chatId].state = 'IDLE';
@@ -368,7 +369,8 @@ bot.on('message', async (msg) => {
                 }
             });
         } catch (e) {
-            bot.sendMessage(chatId, "Failed to download thumb.");
+            console.error("Thumb Download Error:", e);
+            bot.sendMessage(chatId, `Failed to download thumb: ${e.message}`);
         }
         return;
     }
@@ -517,12 +519,27 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
 
         const totalLength = response.headers['content-length'];
 
-        // CHECK SIZE LIMIT
+        // CHECK SIZE LIMIT & DAILY BANDWIDTH
         if (totalLength) {
             const fileSizeGB = totalLength / (1024 * 1024 * 1024);
+            const fileSizeBytes = parseInt(totalLength);
+
+            // 1. File Size Limit
             if (fileSizeGB > limits.max_gb) {
                 throw new Error(`File too large (${fileSizeGB.toFixed(2)} GB).\nYour Plan Limit: ${limits.max_gb} GB.\nUpgrade: /plan`);
             }
+
+            // 2. Daily Bandwidth Limit
+            const dailyUsageBytes = user.daily_usage || 0;
+            const dailyLimitBytes = limits.daily_limit_gb * 1024 * 1024 * 1024;
+
+            if (dailyUsageBytes + fileSizeBytes > dailyLimitBytes) {
+                const usedGB = (dailyUsageBytes / (1024 * 1024 * 1024)).toFixed(2);
+                throw new Error(`⚠️ *Daily Bandwidth Limit Reached*\n\nUsage: ${usedGB} GB / ${limits.daily_limit_gb} GB\n\nPlease wait for 12 AM IST reset or upgrade /plan.`);
+            }
+
+            // Commit usage (Optimistic increment)
+            updateUser(chatId, { daily_usage: dailyUsageBytes + fileSizeBytes });
         }
 
         // Increment usage if passed checks (committed only when download truly starts)

@@ -78,6 +78,17 @@ function checkPlan(userId) {
         });
     }
 
+    // Check Daily Reset (IST 12 AM)
+    const nowIST = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const todayStr = new Date(nowIST).toDateString(); // "Sat Dec 27 2025" (IST Base)
+
+    if (user.last_reset_day !== todayStr) {
+        user = updateUser(userId, {
+            last_reset_day: todayStr,
+            daily_usage: 0
+        });
+    }
+
     return user;
 }
 
