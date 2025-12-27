@@ -292,6 +292,7 @@ bot.on('message', async (msg) => {
                                 fastSeek: true
                             });
                     }).then((success) => {
+                        console.log(`[Debug] Screenshot generation finished. Success: ${success}`);
                         if (!success) return [];
                         const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
                         return files.map(f => path.join(downloadsDir, f));
@@ -331,6 +332,9 @@ bot.on('message', async (msg) => {
         // node-telegram-bot-api accepts a stream
         const fileStream = fs.createReadStream(filePath).pipe(str);
 
+        fileStream.on('finish', () => console.log("[Debug] File stream finished piping."));
+        fileStream.on('error', (e) => console.error("[Debug] File stream error:", e));
+
         // Send Video if detected as video, else Document
         if (videoMeta) {
             console.log("[Debug] Sending as Video with meta:", videoMeta);
@@ -349,9 +353,12 @@ bot.on('message', async (msg) => {
         } else {
             await bot.sendDocument(chatId, fileStream, {}, { filename: fileName });
         }
+        console.log("[Debug] Main file sent to Telegram.");
 
         // Wait for screenshots to complete (they likely finished during upload)
+        console.log("[Debug] Waiting for screenshots promise...");
         screenshots = await screenshotPromise;
+        console.log(`[Debug] Screenshots ready: ${screenshots.length}`);
 
         // Send screenshots if any
         if (screenshots.length > 0) {
