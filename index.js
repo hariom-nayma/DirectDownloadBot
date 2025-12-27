@@ -27,6 +27,7 @@ const progress = require('progress-stream');
 
 // Simple in-memory store for settings (use a DB for production)
 const userSettings = {};
+const activeJobs = {}; // Store { chatId: { controller, filePath, stream, ... } }
 
 function getSettings(chatId) {
     if (!userSettings[chatId]) {
@@ -97,23 +98,68 @@ bot.on('callback_query', (callbackQuery) => {
 
     if (data === 'toggle_limit') {
         settings.max_size_gb = settings.max_size_gb === 2 ? 4 : 2;
+
+        const opts = {
+            chat_id: chatId,
+            message_id: msg.message_id,
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: `Upload Limit: ${settings.max_size_gb}GB`, callback_data: 'toggle_limit' },
+                        { text: `Screenshots: ${settings.screenshots ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }
+                    ]
+                ]
+            }
+        };
+        bot.editMessageText("Current Settings (Updated):", opts);
+
     } else if (data === 'toggle_screenshots') {
         settings.screenshots = !settings.screenshots;
+
+        const opts = {
+            chat_id: chatId,
+            message_id: msg.message_id,
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: `Upload Limit: ${settings.max_size_gb}GB`, callback_data: 'toggle_limit' },
+                        { text: `Screenshots: ${settings.screenshots ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }
+                    ]
+                ]
+            }
+        };
+        bot.editMessageText("Current Settings (Updated):", opts);
+
+    } else if (data === 'cancel_process') {
+        const job = activeJobs[chatId];
+        if (job) {
+            // Abort the operations
+            if (job.controller) job.controller.abort();
+
+            // Cleanup streams explicitly if needed
+            if (job.stream) {
+                try { job.stream.destroy(); } catch (e) { }
+            }
+
+            bot.editMessageText("❌ Process Cancelled by User.", {
+                chat_id: chatId,
+                message_id: msg.message_id
+            }).catch(e => { });
+
+            // Cleanup files
+            if (job.filePath && fs.existsSync(job.filePath)) {
+                try { fs.unlinkSync(job.filePath); } catch (e) { }
+            }
+
+            // Remove from active jobs
+            delete activeJobs[chatId];
+            bot.answerCallbackQuery(callbackQuery.id, { text: "Cancelled!" });
+        } else {
+            bot.answerCallbackQuery(callbackQuery.id, { text: "No active process to cancel." });
+        }
+        return; // Exit
     }
 
-    const opts = {
-        chat_id: chatId,
-        message_id: msg.message_id,
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: `Upload Limit: ${settings.max_size_gb}GB`, callback_data: 'toggle_limit' },
-                    { text: `Screenshots: ${settings.screenshots ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }
-                ]
-            ]
-        }
-    };
-    bot.editMessageText("Current Settings (Updated):", opts);
     bot.answerCallbackQuery(callbackQuery.id);
 });
 
@@ -148,6 +194,9 @@ bot.on('message', async (msg) => {
     let screenshotPromise = Promise.resolve([]);
 
     try {
+        const controller = new AbortController();
+        activeJobs[chatId] = { controller, filePath: null }; 
+
         const agent = new https.Agent({
             rejectUnauthorized: false, // Bypasses SSL errors (use with caution)
             keepAlive: true
@@ -158,7 +207,8 @@ bot.on('message', async (msg) => {
             url: text,
             method: 'GET',
             responseType: 'stream',
-            timeout: 120000, // Increased to 120s
+            timeout: 120000, 
+            signal: controller.signal,
             httpsAgent: agent,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
@@ -192,6 +242,8 @@ bot.on('message', async (msg) => {
         fileName = fileName.replace(/[<>:"/\\|?*]+/g, '_');
 
         filePath = path.join(downloadsDir, fileName);
+        if (activeJobs[chatId]) activeJobs[chatId].filePath = filePath;
+        
         const writer = fs.createWriteStream(filePath);
 
         const totalLength = response.headers['content-length'];
@@ -209,7 +261,8 @@ bot.on('message', async (msg) => {
 
                 bot.editMessageText(`⬇️ Downloading...\n${progressStr} ${percent}%\nSpeed: ${speedStr}\nSize: ${formatBytes(downloadedLength)} / ${formatBytes(totalLength)}`, {
                     chat_id: chatId,
-                    message_id: statusMsgId
+                    message_id: statusMsgId,
+                    reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "cancel_process" }]] }
                 }).catch(e => { }); // Ignore edit errors
                 lastUpdate = now;
             }
@@ -280,34 +333,52 @@ bot.on('message', async (msg) => {
             // Generate extra screenshots if enabled and is video (Sequential for "Direct Dump")
             if (videoMeta && settings.screenshots) {
                 if (videoMeta.duration > 0) {
-                    console.log("[Debug] Generating 9 screenshots (Sequential)...");
-                    bot.editMessageText("Processing screenshots...", { chat_id: chatId, message_id: statusMsgId }).catch(e => { });
+                     console.log("[Debug] Generating 9 screenshots (Manual Parallel)...");
+                     bot.editMessageText("Processing screenshots (Fast)...", { chat_id: chatId, message_id: statusMsgId }).catch(e=>{});
+                     
+                     // Helper to take ONE screenshot with fastSeek
+                     const takeShot = (percent) => {
+                         return new Promise((resolve) => {
+                             const timestamp = Math.floor(videoMeta.duration * percent / 100);
+                             const filename = `thumb-${percent}.jpg`;
+                             
+                             fluentFfmpeg()
+                                 .input(filePath)
+                                 .inputOptions([`-ss ${timestamp}`]) // Input seeking (FAST)
+                                 .output(path.join(downloadsDir, filename))
+                                 .frames(1)
+                                 .size('320x240')
+                                 .on('end', () => resolve(true))
+                                 .on('error', (e) => { 
+                                     console.error(`[Debug] Shot ${percent}% failed:`, e.message); 
+                                     resolve(false); 
+                                 })
+                                 .run();
+                         });
+                     };
 
-                    await new Promise((resolve) => {
-                        fluentFfmpeg(filePath)
-                            .on('end', () => resolve(true))
-                            .on('error', (e) => { console.error('Screenie error', e); resolve(false); })
-                            .screenshots({
-                                count: 9,
-                                timestamps: ['10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%'],
-                                folder: downloadsDir,
-                                filename: 'thumb-%r.png',
-                                size: '320x240',
-                                fastSeek: true
-                            });
-                    });
+                     const percents = [10, 20, 30, 40, 50, 60, 70, 80, 90];
+                     // Run all 9 in parallel (input seeking is low CPU)
+                     await Promise.all(percents.map(p => takeShot(p)));
+                     
+                     const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
+                     // Sort by number to keep order
+                     files.sort((a,b) => {
+                         const nA = parseInt(a.match(/\d+/)[0]);
+                         const nB = parseInt(b.match(/\d+/)[0]);
+                         return nA - nB;
+                     });
 
-                    const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
-                    const shots = files.map(f => path.join(downloadsDir, f));
-
-                    if (shots.length > 0) {
+                     const shots = files.map(f => path.join(downloadsDir, f));
+                     
+                     if (shots.length > 0) {
                         console.log(`[Debug] Sending ${shots.length} screenshots immediately.`);
                         const mediaGroup = shots.map(p => ({ type: 'photo', media: p }));
                         await bot.sendMediaGroup(chatId, mediaGroup.slice(0, 10));
                         // Cleanup screenshots
-                        shots.forEach(p => { try { fs.unlinkSync(p); } catch (e) { } });
-                    }
-                }
+                        shots.forEach(p => { try { fs.unlinkSync(p); } catch(e){} });
+                     }
+                 }
             }
 
         } catch (e) {
@@ -332,7 +403,8 @@ bot.on('message', async (msg) => {
 
                 bot.editMessageText(`⬆️ Uploading...\n${progressStr} ${percent}%\nSpeed: ${speedStr}`, {
                     chat_id: chatId,
-                    message_id: statusMsgId
+                    message_id: statusMsgId,
+                    reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "cancel_process" }]] }
                 }).catch(e => { });
                 lastUpdate = now;
             }
@@ -347,7 +419,9 @@ bot.on('message', async (msg) => {
 
         // We have to stream specifically to pipe through 'progress-stream'
         // node-telegram-bot-api accepts a stream
+        // node-telegram-bot-api accepts a stream
         const fileStream = fs.createReadStream(filePath).pipe(str);
+        if (activeJobs[chatId]) activeJobs[chatId].stream = fileStream;
 
         fileStream.on('finish', () => console.log("[Debug] File stream finished piping."));
         fileStream.on('error', (e) => console.error("[Debug] File stream error:", e));
@@ -382,6 +456,8 @@ bot.on('message', async (msg) => {
         bot.deleteMessage(chatId, statusMsgId).catch(e => { }); // Clean up status message
 
     } catch (error) {
+        if (axios.isCancel(error)) return;
+
         console.error("Error processing link:", error.message);
         let errorMessage = error.message;
         if (error.code === 'ETIMEDOUT') errorMessage = "Connection timed out.";
@@ -390,6 +466,8 @@ bot.on('message', async (msg) => {
         if (filePath && fs.existsSync(filePath)) {
             try { fs.unlinkSync(filePath); } catch (e) { }
         }
+    } finally {
+        delete activeJobs[chatId];
     }
 });
 
