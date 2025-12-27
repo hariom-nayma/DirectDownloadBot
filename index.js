@@ -132,7 +132,7 @@ bot.onText(/\/plan/, (msg) => {
         expiryText = new Date(user.expiry).toLocaleDateString();
     }
 
-    const usageText = user.plan === 'free' ? `\nWeekly Usage: ${user.downloads_this_week}/3` : '';
+    const usageText = user.plan === 'free' ? `\nWeekly Usage: ${user.downloads_this_week}/3` : `${user.downloads_this_week}`;
 
     const text =
         `💎 *Your Current Plan*
@@ -140,6 +140,7 @@ bot.onText(/\/plan/, (msg) => {
 📌 *Plan:* ${user.plan.toUpperCase()}
 ⏳ *Expiry:* ${expiryText}
 📊 ${usageText}
+⏬ *Today's Usage:* ${limits.daily_limit_gb} GB
 
 ✨ *Upgrade Options*
 ━━━━━━━━━━━━━━━
