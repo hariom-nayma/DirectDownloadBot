@@ -140,7 +140,6 @@ bot.onText(/\/plan/, (msg) => {
 📌 *Plan:* ${user.plan.toUpperCase()}
 ⏳ *Expiry:* ${expiryText}
 📊 ${usageText}
-⏬ *Today's Usage:* ${limits.daily_limit_gb} GB
 
 ✨ *Upgrade Options*
 ━━━━━━━━━━━━━━━
