@@ -144,6 +144,9 @@ bot.on('message', async (msg) => {
     let statusMsgId = statusMsg.message_id;
     let lastUpdate = Date.now();
 
+    let filePath = null;
+    let screenshotPromise = Promise.resolve([]);
+
     try {
         const agent = new https.Agent({
             rejectUnauthorized: false, // Bypasses SSL errors (use with caution)
@@ -188,7 +191,7 @@ bot.on('message', async (msg) => {
         // Sanitize filename
         fileName = fileName.replace(/[<>:"/\\|?*]+/g, '_');
 
-        const filePath = path.join(downloadsDir, fileName);
+        filePath = path.join(downloadsDir, fileName);
         const writer = fs.createWriteStream(filePath);
 
         const totalLength = response.headers['content-length'];
@@ -323,9 +326,16 @@ bot.on('message', async (msg) => {
                 bot.editMessageText(`⬆️ Uploading...\n${progressStr} ${percent}%\nSpeed: ${speedStr}`, {
                     chat_id: chatId,
                     message_id: statusMsgId
-                }).catch(e => { });
+                }).catch(e => {}); 
                 lastUpdate = now;
-            }
+             }
+             
+             if (progress.percentage >= 100) {
+                 bot.editMessageText(`☁️ Syncing to Telegram Cloud...\n(This ensures the file is playable)\nPlease wait, this may take a few minutes.`, {
+                    chat_id: chatId,
+                    message_id: statusMsgId
+                }).catch(e => {});
+             }
         });
 
         // We have to stream specifically to pipe through 'progress-stream'
