@@ -28,15 +28,18 @@ const { getUser, updateUser, checkPlan } = require('./helpers');
 // Admin ID from env
 const ADMIN_ID = process.env.ADMIN_ID;
 
-const activeJobs = {}; // Store { chatId: { controller, filePath, stream, pendingUrl, state, customName, customThumb } }
+// Separate logs for Setup State vs Running Jobs
+const setupState = {}; // { chatId: { state: 'WAITING_RENAME'|'WAITING_THUMB', pendingUrl, customName, customThumb } }
+const runningJobs = {}; // { jobId: { chatId, controller, stream, filePath } }
+const userDownloads = {}; // { chatId: [jobId1, jobId2] }
 
 // Helper to get effective limits based on plan
 function getPlanLimits(plan) {
-    if (plan === 'free') return { max_gb: 1, bandwidth: 'Standard' };
-    if (plan === 'basic') return { max_gb: 1, bandwidth: 'Standard' };
-    if (plan === 'premium') return { max_gb: 2, bandwidth: 'High' };
-    if (plan === 'vip') return { max_gb: 2, bandwidth: 'High' }; // VIP duration is longer
-    return { max_gb: 1 };
+    if (plan === 'free') return { max_gb: 1, parallel: 1 };
+    if (plan === 'basic') return { max_gb: 1, parallel: 1 };
+    if (plan === 'premium') return { max_gb: 2, parallel: 2 };
+    if (plan === 'vip') return { max_gb: 2, parallel: 3 };
+    return { max_gb: 1, parallel: 1 };
 }
 
 function formatBytes(bytes) {
@@ -118,6 +121,7 @@ bot.onText(/\/myid/, (msg) => {
     bot.sendMessage(msg.chat.id, `Your ID: \`${msg.from.id}\``, { parse_mode: 'Markdown' });
 });
 
+// Plan Command: Show Plan Info and Buy Buttons (No Settings)
 bot.onText(/\/plan/, (msg) => {
     const chatId = msg.chat.id;
     const user = checkPlan(chatId);
@@ -130,9 +134,9 @@ bot.onText(/\/plan/, (msg) => {
     const usageText = user.plan === 'free' ? `\nWeekly Usage: ${user.downloads_this_week}/3` : '';
 
     const text = `📋 *Your Plan: ${user.plan.toUpperCase()}*\nExpiry: ${expiryText}${usageText}\n\n*Available Plans:*\n\n` +
-        `🥉 *Basic (₹79/mo)*\n✅ Unlimited Downloads\n✅ 1GB File Limit\n\n` +
-        `🥈 *Premium (₹99/mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n✅ Custom Captions\n\n` +
-        `🥇 *VIP (₹199/2mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n✅ Custom Captions\n✅ 3 Month Access`;
+        `🥉 *Basic (₹79/mo)*\n✅ Unlimited Downloads\n✅ 1GB File Limit\n✅ 1 Parallel Download\n\n` +
+        `🥈 *Premium (₹99/mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n✅ 2 Parallel Downloads\n✅ Custom Captions\n\n` +
+        `🥇 *VIP (₹199/2mo)*\n✅ Unlimited Downloads\n✅ 2GB File Limit\n✅ 3 Parallel Downloads\n✅ Custom Captions\n✅ 3 Month Access`;
 
     const opts = {
         parse_mode: 'Markdown',
@@ -144,12 +148,26 @@ bot.onText(/\/plan/, (msg) => {
                 ],
                 [
                     { text: "Buy VIP (₹199)", url: "https://t.me/clickme4it?text=I%20want%20to%20buy%20VIP%20Plan" }
-                ],
-                [{ text: `Screenshots: ${user.screenshots !== false ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }]
+                ]
             ]
         }
     };
     bot.sendMessage(chatId, text, opts);
+});
+
+// Settings Command: Configurations
+bot.onText(/\/settings/, (msg) => {
+    const chatId = msg.chat.id;
+    const user = checkPlan(chatId);
+
+    bot.sendMessage(chatId, "⚙️ *Bot Settings*", {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: `Screenshots: ${user.screenshots !== false ? 'ON' : 'OFF'}`, callback_data: 'toggle_screenshots' }]
+            ]
+        }
+    });
 });
 
 bot.onText(/\/set_caption(.+)?/, (msg, match) => {
@@ -209,56 +227,61 @@ bot.on('callback_query', (callbackQuery) => {
     if (data === 'toggle_screenshots') {
         const newState = user.screenshots === false ? true : false; // Default true
         updateUser(chatId, { screenshots: newState });
-
         bot.answerCallbackQuery(callbackQuery.id, { text: `Screenshots ${newState ? 'ON' : 'OFF'}` });
 
     } else if (data === 'start_rename') {
-        activeJobs[chatId].state = 'WAITING_RENAME';
+        if (!setupState[chatId]) setupState[chatId] = {};
+        setupState[chatId].state = 'WAITING_RENAME';
         bot.editMessageText("✏️ *Send me the new filename:*", {
             chat_id: chatId, message_id: msg.message_id, parse_mode: 'Markdown'
         });
 
     } else if (data === 'start_thumb') {
-        activeJobs[chatId].state = 'WAITING_THUMB';
+        if (!setupState[chatId]) setupState[chatId] = {};
+        setupState[chatId].state = 'WAITING_THUMB';
         bot.editMessageText("🖼️ *Send me a photo to use as cover:*", {
             chat_id: chatId, message_id: msg.message_id, parse_mode: 'Markdown'
         });
 
     } else if (data === 'confirm_download') {
-        const job = activeJobs[chatId];
+        const job = setupState[chatId];
         if (job && job.pendingUrl) {
             bot.deleteMessage(chatId, msg.message_id).catch(e => { });
+            // Start download with captured options
             processDownload(chatId, job.pendingUrl, job.customName, job.customThumb);
+            // Clear setup state
+            delete setupState[chatId];
         }
 
-    } else if (data === 'cancel_process') {
-        const job = activeJobs[chatId];
-        if (job) {
-            // Abort the operations
-            if (job.controller) job.controller.abort();
+    } else if (data.startsWith('cancel_')) {
+        const jobId = data.replace('cancel_', '');
 
-            // Cleanup streams explicitly if needed
-            if (job.stream) {
-                try { job.stream.destroy(); } catch (e) { }
-            }
-
-            bot.editMessageText("❌ Process Cancelled by User.", {
+        // Setup Cancellation (cancel_process)
+        if (jobId === 'process') {
+            delete setupState[chatId];
+            bot.editMessageText("❌ Setup Cancelled.", {
                 chat_id: chatId,
                 message_id: msg.message_id
             }).catch(e => { });
+            return;
+        }
 
-            // Cleanup files
+        // Job Cancellation
+        const job = runningJobs[jobId];
+        if (job) {
+            if (job.controller) job.controller.abort();
+            if (job.stream) {
+                try { job.stream.destroy(); } catch (e) { }
+            }
             if (job.filePath && fs.existsSync(job.filePath)) {
-                try { fs.unlinkSync(job.filePath); } catch (e) { }
+                try { fs.unlinkSync(job.filePath); } catch (e) { };
             }
 
-            // Remove from active jobs
-            delete activeJobs[chatId];
-            bot.answerCallbackQuery(callbackQuery.id, { text: "Cancelled!" });
+            bot.answerCallbackQuery(callbackQuery.id, { text: "Cancelling download..." });
+            // Cleanup happens in finally block of processDownload
         } else {
-            bot.answerCallbackQuery(callbackQuery.id, { text: "No active process to cancel." });
+            bot.answerCallbackQuery(callbackQuery.id, { text: "Job already finished or invalid." });
         }
-        return; // Exit
     }
 
     bot.answerCallbackQuery(callbackQuery.id);
@@ -271,9 +294,9 @@ bot.on('message', async (msg) => {
     const text = msg.text;
 
     // Handle Rename State
-    if (activeJobs[chatId] && activeJobs[chatId].state === 'WAITING_RENAME' && text && !text.startsWith('/')) {
-        activeJobs[chatId].customName = text.trim();
-        activeJobs[chatId].state = 'IDLE';
+    if (setupState[chatId] && setupState[chatId].state === 'WAITING_RENAME' && text && !text.startsWith('/')) {
+        setupState[chatId].customName = text.trim();
+        setupState[chatId].state = 'IDLE';
         bot.sendMessage(chatId, `✅ Name set to: \`${text.trim()}\`\n\nSelect action:`, {
             parse_mode: 'Markdown',
             reply_markup: {
@@ -287,7 +310,7 @@ bot.on('message', async (msg) => {
     }
 
     // Handle Photo (Custom Thumb)
-    if (msg.photo && activeJobs[chatId] && activeJobs[chatId].state === 'WAITING_THUMB') {
+    if (msg.photo && setupState[chatId] && setupState[chatId].state === 'WAITING_THUMB') {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
         const file = await bot.getFile(fileId);
         const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
@@ -307,8 +330,8 @@ bot.on('message', async (msg) => {
                 writer.on('error', reject);
             });
 
-            activeJobs[chatId].customThumb = thumbPath;
-            activeJobs[chatId].state = 'IDLE';
+            setupState[chatId].customThumb = thumbPath;
+            setupState[chatId].state = 'IDLE';
             bot.sendMessage(chatId, "✅ Cover set!\n\nSelect action:", {
                 reply_markup: {
                     inline_keyboard: [[
@@ -332,7 +355,7 @@ bot.on('message', async (msg) => {
         if (!targetUrl.protocol.startsWith('http')) throw new Error('Invalid protocol');
     } catch (e) {
         // Only warn if not in a state
-        if (!activeJobs[chatId]) bot.sendMessage(chatId, "Please send a valid HTTP/HTTPS URL.");
+        if (!setupState[chatId]) bot.sendMessage(chatId, "Please send a valid HTTP/HTTPS URL.");
         return;
     }
 
@@ -340,13 +363,14 @@ bot.on('message', async (msg) => {
     const user = checkPlan(chatId);
 
     // Setup Job Intent
-    if (!activeJobs[chatId]) activeJobs[chatId] = {};
-    activeJobs[chatId].pendingUrl = text;
-    activeJobs[chatId].state = 'IDLE';
+    if (!setupState[chatId]) setupState[chatId] = {};
+    setupState[chatId].pendingUrl = text;
+    setupState[chatId].state = 'IDLE';
 
     // Free Plan -> Auto Start
     if (user.plan === 'free') {
         processDownload(chatId, text);
+        delete setupState[chatId]; // Clear setup immediately
         return;
     }
 
@@ -378,10 +402,22 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
     const user = checkPlan(chatId);
     const limits = getPlanLimits(user.plan);
 
+    // 1. Weekly Limit Check (Free only)
     if (user.plan === 'free' && user.downloads_this_week >= 3) {
         bot.sendMessage(chatId, "⚠️ *Weekly Limit Reached* (3/3)\n\nUpgrade to /plan for Unlimited Downloads!", { parse_mode: 'Markdown' });
         return;
     }
+
+    // 2. Parallel Limits Check
+    if (!userDownloads[chatId]) userDownloads[chatId] = [];
+    if (userDownloads[chatId].length >= limits.parallel) {
+        bot.sendMessage(chatId, `⚠️ *Parallel Limit Reached* (${userDownloads[chatId].length}/${limits.parallel})\n\nPlease wait for current downloads to finish or upgrade /plan.`, { parse_mode: 'Markdown' });
+        return;
+    }
+
+    // Init Job
+    const jobId = Date.now().toString() + Math.random().toString(36).substring(7);
+    userDownloads[chatId].push(jobId);
 
     let statusMsg = await bot.sendMessage(chatId, "Initializing download...");
     let statusMsgId = statusMsg.message_id;
@@ -391,11 +427,14 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
 
     try {
         const controller = new AbortController();
-        // Update existing job or create new if immediate
-        if (!activeJobs[chatId]) activeJobs[chatId] = {};
 
-        activeJobs[chatId].controller = controller;
-        activeJobs[chatId].filePath = null;
+        // Register Running Job
+        runningJobs[jobId] = {
+            chatId,
+            controller,
+            filePath: null, // set later
+            stream: null
+        };
 
         const agent = new https.Agent({
             rejectUnauthorized: false,
@@ -445,7 +484,7 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
         fileName = fileName.replace(/[<>:"/\\|?*]+/g, '_');
 
         filePath = path.join(downloadsDir, fileName);
-        if (activeJobs[chatId]) activeJobs[chatId].filePath = filePath;
+        runningJobs[jobId].filePath = filePath;
 
         const writer = fs.createWriteStream(filePath);
 
@@ -459,11 +498,14 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
             }
         }
 
-        // Increment usage if passed checks
+        // Increment usage if passed checks (committed only when download truly starts)
         updateUser(chatId, { downloads_this_week: user.downloads_this_week + 1 });
 
         let downloadedLength = 0;
         let startTime = Date.now();
+
+        // Update Cancellation Button to include jobId
+        const cancelBtn = { inline_keyboard: [[{ text: "❌ Cancel", callback_data: `cancel_${jobId}` }]] };
 
         response.data.on('data', (chunk) => {
             downloadedLength += chunk.length;
@@ -477,7 +519,7 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                 bot.editMessageText(`⬇️ Downloading...\n${progressStr} ${percent}%\nSpeed: ${speedStr}\nSize: ${formatBytes(downloadedLength)} / ${formatBytes(totalLength)}`, {
                     chat_id: chatId,
                     message_id: statusMsgId,
-                    reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "cancel_process" }]] }
+                    reply_markup: cancelBtn
                 }).catch(e => { }); // Ignore edit errors
                 lastUpdate = now;
             }
@@ -522,14 +564,14 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
 
                         // Generate thumbnail if NO custom thumb provided
                         if (!thumbPath) {
-                            thumbPath = path.join(downloadsDir, 'cover-thumb.jpg');
+                            thumbPath = path.join(downloadsDir, `cover-thumb-${jobId}.jpg`);
                             fluentFfmpeg(filePath)
                                 .on('end', () => resolve())
                                 .on('error', () => resolve()) // Ignore error
                                 .screenshots({
                                     count: 1,
                                     folder: downloadsDir,
-                                    filename: 'cover-thumb.jpg',
+                                    filename: `cover-thumb-${jobId}.jpg`,
                                     timemarks: ['10%'], // Take from 10% point
                                     size: '320x240'
                                 });
@@ -552,7 +594,7 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                     const takeShot = (percent) => {
                         return new Promise((resolve) => {
                             const timestamp = Math.floor(videoMeta.duration * percent / 100);
-                            const filename = `thumb-${percent}.jpg`;
+                            const filename = `thumb-${jobId}-${percent}.jpg`;
 
                             fluentFfmpeg()
                                 .input(filePath)
@@ -573,11 +615,11 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                     // Run all 9 in parallel (input seeking is low CPU)
                     await Promise.all(percents.map(p => takeShot(p)));
 
-                    const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
+                    const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith(`thumb-${jobId}-`));
                     // Sort by number to keep order
                     files.sort((a, b) => {
-                        const nA = parseInt(a.match(/\d+/)[0]);
-                        const nB = parseInt(b.match(/\d+/)[0]);
+                        const nA = parseInt(a.match(/-(\d+).jpg/)[1]);
+                        const nB = parseInt(b.match(/-(\d+).jpg/)[1]);
                         return nA - nB;
                     });
 
@@ -616,7 +658,7 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                 bot.editMessageText(`⬆️ Uploading...\n${progressStr} ${percent}%\nSpeed: ${speedStr}`, {
                     chat_id: chatId,
                     message_id: statusMsgId,
-                    reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "cancel_process" }]] }
+                    reply_markup: cancelBtn
                 }).catch(e => { });
                 lastUpdate = now;
             }
@@ -631,9 +673,8 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
 
         // We have to stream specifically to pipe through 'progress-stream'
         // node-telegram-bot-api accepts a stream
-        // node-telegram-bot-api accepts a stream
         const fileStream = fs.createReadStream(filePath).pipe(str);
-        if (activeJobs[chatId]) activeJobs[chatId].stream = fileStream;
+        runningJobs[jobId].stream = fileStream;
 
         fileStream.on('finish', () => console.log("[Debug] File stream finished piping."));
         fileStream.on('error', (e) => console.error("[Debug] File stream error:", e));
@@ -679,7 +720,10 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
         bot.deleteMessage(chatId, statusMsgId).catch(e => { }); // Clean up status message
 
     } catch (error) {
-        if (axios.isCancel(error)) return;
+        if (axios.isCancel(error)) {
+            bot.editMessageText("❌ Process Cancelled.", { chat_id: chatId, message_id: statusMsgId });
+            return;
+        }
 
         console.error("Error processing link:", error.message);
         let errorMessage = error.message;
@@ -690,7 +734,9 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
             try { fs.unlinkSync(filePath); } catch (e) { }
         }
     } finally {
-        delete activeJobs[chatId];
+        delete runningJobs[jobId];
+        userDownloads[chatId] = userDownloads[chatId].filter(id => id !== jobId);
+        if (userDownloads[chatId].length === 0) delete userDownloads[chatId];
     }
 }
 
