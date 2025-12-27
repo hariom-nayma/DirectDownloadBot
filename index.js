@@ -135,9 +135,9 @@ bot.on('message', async (msg) => {
         return;
     }
 
-const https = require('https');
+    const https = require('https');
 
-// ...
+    // ...
 
     const settings = getSettings(chatId);
     let statusMsg = await bot.sendMessage(chatId, "Initializing download...");
@@ -145,9 +145,9 @@ const https = require('https');
     let lastUpdate = Date.now();
 
     try {
-        const agent = new https.Agent({  
+        const agent = new https.Agent({
             rejectUnauthorized: false, // Bypasses SSL errors (use with caution)
-            keepAlive: true 
+            keepAlive: true
         });
 
         // Download with progress
@@ -157,7 +157,7 @@ const https = require('https');
             responseType: 'stream',
             timeout: 120000, // Increased to 120s
             httpsAgent: agent,
-            headers: { 
+            headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
                 'Referer': targetUrl.origin,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -175,16 +175,16 @@ const https = require('https');
                 fileName = match[1];
             }
         } else {
-             // Fallback to URL path
-             try {
+            // Fallback to URL path
+            try {
                 const pathname = targetUrl.pathname;
                 const basename = path.basename(pathname);
                 if (basename && basename.length > 0) fileName = basename;
                 // Decode URI component just in case
                 fileName = decodeURIComponent(fileName);
-            } catch (e) {}
+            } catch (e) { }
         }
-        
+
         // Sanitize filename
         fileName = fileName.replace(/[<>:"/\\|?*]+/g, '_');
 
@@ -225,50 +225,79 @@ const https = require('https');
             throw new Error(`File size (${formatBytes(stats.size)}) exceeds your limit of ${settings.max_size_gb}GB.`);
         }
 
-        // --- Screenshots logic ---
+        // --- Video Processing (Metadata & Screenshots) ---
         let screenshots = [];
-        console.log(`[Debug] Checking screenshots. Enabled: ${settings.screenshots}, Filename: ${fileName}`);
+        let videoMeta = null;
+        let thumbPath = null;
 
-        if (settings.screenshots) {
-             if (fileName.match(/\.(mp4|mkv|avi|mov)$/i)) {
-                 console.log("[Debug] File is video. Starting ffprobe...");
-                 bot.editMessageText("Processing screenshots...", { chat_id: chatId, message_id: statusMsgId }).catch(e=>{});
+        console.log("[Debug] Probing file for metadata...");
 
-                 await new Promise((resolve) => {
-                     fluentFfmpeg.ffprobe(filePath, (err, metadata) => {
-                         if (err) { console.error("[Debug] ffprobe error:", err); resolve(); return; }
-                         if (!metadata) { console.error("[Debug] No metadata"); resolve(); return; }
-                         
-                         const duration = metadata.format.duration;
-                         console.log(`[Debug] Video Duration: ${duration}`);
-                         
-                         if (duration > 0) { // > 0 secs (Testing Mode)
-                             const count = 10;
-                             console.log("[Debug] Taking screenshots...");
-                             // Take screenshots
-                             fluentFfmpeg(filePath)
-                               .on('end', () => { console.log("[Debug] Screenshots taken."); resolve(); })
-                               .on('error', (e) => { console.error('[Debug] Screenshot error', e); resolve(); })
-                               .screenshots({
-                                   count: count,
-                                   folder: downloadsDir,
-                                   filename: 'thumb-%r.png',
-                                   size: '320x240'
-                               });
-                         } else {
-                             console.log("[Debug] Duration too short");
-                             resolve(); // too short
-                         }
-                     });
-                 });
-                 
-                 // Collect generated screenshots
-                  const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
-                  console.log(`[Debug] Found ${files.length} screenshots.`);
-                  screenshots = files.map(f => path.join(downloadsDir, f));
-             } else {
-                  console.log("[Debug] File is NOT video (regex mismatch)");
-             }
+        try {
+            await new Promise((resolve) => {
+                fluentFfmpeg.ffprobe(filePath, (err, metadata) => {
+                    if (err || !metadata) {
+                        console.log("[Debug] Probing failed or not media:", err ? err.message : "no meta");
+                        resolve();
+                        return;
+                    }
+
+                    // Check for video stream
+                    const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+                    if (videoStream) {
+                        console.log("[Debug] Detected Video Stream.");
+                        videoMeta = {
+                            width: videoStream.width,
+                            height: videoStream.height,
+                            duration: Math.ceil(metadata.format.duration || 0)
+                        };
+
+                        // Generate Thumbnail (Cover)
+                        fluentFfmpeg(filePath)
+                            .on('end', () => {
+                                thumbPath = path.join(downloadsDir, 'cover-thumb.jpg');
+                                resolve();
+                            })
+                            .on('error', (e) => {
+                                console.error("[Debug] Thumb gen error:", e.message);
+                                resolve();
+                            })
+                            .screenshots({
+                                count: 1,
+                                folder: downloadsDir,
+                                filename: 'cover-thumb.jpg',
+                                timemarks: ['10%'], // Take from 10% point
+                                size: '320x240'
+                            });
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+
+            // Generate extra screenshots if enabled and is video
+            if (videoMeta && settings.screenshots) {
+                if (videoMeta.duration > 0) {
+                    console.log("[Debug] Generating extra screenshots...");
+                    await new Promise((resolve) => {
+                        fluentFfmpeg(filePath)
+                            .on('end', resolve)
+                            .on('error', (e) => { console.error('Screenie error', e); resolve(); })
+                            .screenshots({
+                                count: 5, // Reduced to 5
+                                folder: downloadsDir,
+                                filename: 'thumb-%r.png',
+                                size: '320x240',
+                                fastSeek: true // Keyframe seek
+                            });
+                    });
+
+                    const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
+                    screenshots = files.map(f => path.join(downloadsDir, f));
+                }
+            }
+
+        } catch (e) {
+            console.error("[Debug] Metadata/Processing Error:", e);
         }
 
         bot.editMessageText("⬆️ Uploading...", { chat_id: chatId, message_id: statusMsgId }).catch(e => { });
@@ -299,9 +328,25 @@ const https = require('https');
         // node-telegram-bot-api accepts a stream
         const fileStream = fs.createReadStream(filePath).pipe(str);
 
-        // Send Video if likely video, else Document
-        if (fileName.match(/\.(mp4|mkv|avi|mov)$/i)) {
-            await bot.sendVideo(chatId, fileStream, {}, { filename: fileName });
+        // Send Video if detected as video, else Document
+        if (videoMeta) {
+            console.log("[Debug] Sending as Video with meta:", videoMeta);
+            const opts = {
+                caption: fileName,
+                duration: videoMeta.duration,
+                width: videoMeta.width,
+                height: videoMeta.height,
+                supports_streaming: true
+            };
+            // Note: node-telegram-bot-api sends 'thumb' as file path if provided
+            // We need to pass the file stream for the video
+            // AND the thumbnail. The library handling of 'thumb' in opts might vary.
+            // It often expects a path or a Buffer.
+            if (thumbPath && fs.existsSync(thumbPath)) {
+                opts.thumb = thumbPath; // Pass path
+            }
+
+            await bot.sendVideo(chatId, fileStream, opts, { filename: fileName });
         } else {
             await bot.sendDocument(chatId, fileStream, {}, { filename: fileName });
         }
@@ -318,7 +363,12 @@ const https = require('https');
                 await bot.sendMediaGroup(chatId, mediaGroup.slice(0, 10));
             }
             // Cleanup screenshots
-            screenshots.forEach(p => fs.unlinkSync(p));
+            screenshots.forEach(p => { try { fs.unlinkSync(p); } catch (e) { } });
+        }
+
+        // Cleanup thumbnails
+        if (thumbPath && fs.existsSync(thumbPath)) {
+            try { fs.unlinkSync(thumbPath); } catch (e) { }
         }
 
         // Cleanup main file
@@ -331,8 +381,8 @@ const https = require('https');
         if (error.code === 'ETIMEDOUT') errorMessage = "Connection timed out.";
         bot.sendMessage(chatId, `Failed: ${errorMessage}`);
         // Cleanup if needed
-        if (fs.existsSync(downloadsDir)) {
-            // Cleanup logic if valuable
+        if (filePath && fs.existsSync(filePath)) {
+            try { fs.unlinkSync(filePath); } catch (e) { }
         }
     }
 });
