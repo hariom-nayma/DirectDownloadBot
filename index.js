@@ -277,12 +277,13 @@ bot.on('message', async (msg) => {
                 });
             });
 
-            // Generate extra screenshots if enabled and is video (Async Promise)
-            let screenshotPromise = Promise.resolve([]);
+            // Generate extra screenshots if enabled and is video (Sequential for "Direct Dump")
             if (videoMeta && settings.screenshots) {
                 if (videoMeta.duration > 0) {
-                    console.log("[Debug] Generating 9 extra screenshots (Parallel)...");
-                    screenshotPromise = new Promise((resolve) => {
+                    console.log("[Debug] Generating 9 screenshots (Sequential)...");
+                    bot.editMessageText("Processing screenshots...", { chat_id: chatId, message_id: statusMsgId }).catch(e => { });
+
+                    await new Promise((resolve) => {
                         fluentFfmpeg(filePath)
                             .on('end', () => resolve(true))
                             .on('error', (e) => { console.error('Screenie error', e); resolve(false); })
@@ -294,12 +295,18 @@ bot.on('message', async (msg) => {
                                 size: '320x240',
                                 fastSeek: true
                             });
-                    }).then((success) => {
-                        console.log(`[Debug] Screenshot generation finished. Success: ${success}`);
-                        if (!success) return [];
-                        const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
-                        return files.map(f => path.join(downloadsDir, f));
                     });
+
+                    const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
+                    const shots = files.map(f => path.join(downloadsDir, f));
+
+                    if (shots.length > 0) {
+                        console.log(`[Debug] Sending ${shots.length} screenshots immediately.`);
+                        const mediaGroup = shots.map(p => ({ type: 'photo', media: p }));
+                        await bot.sendMediaGroup(chatId, mediaGroup.slice(0, 10));
+                        // Cleanup screenshots
+                        shots.forEach(p => { try { fs.unlinkSync(p); } catch (e) { } });
+                    }
                 }
             }
 
@@ -326,16 +333,16 @@ bot.on('message', async (msg) => {
                 bot.editMessageText(`⬆️ Uploading...\n${progressStr} ${percent}%\nSpeed: ${speedStr}`, {
                     chat_id: chatId,
                     message_id: statusMsgId
-                }).catch(e => {}); 
+                }).catch(e => { });
                 lastUpdate = now;
-             }
-             
-             if (progress.percentage >= 100) {
-                 bot.editMessageText(`☁️ Syncing to Telegram Cloud...\n(This ensures the file is playable)\nPlease wait, this may take a few minutes.`, {
+            }
+
+            if (progress.percentage >= 100) {
+                bot.editMessageText(`☁️ Syncing to Telegram Cloud...\n(This ensures the file is playable)\nPlease wait, this may take a few minutes.`, {
                     chat_id: chatId,
                     message_id: statusMsgId
-                }).catch(e => {});
-             }
+                }).catch(e => { });
+            }
         });
 
         // We have to stream specifically to pipe through 'progress-stream'
@@ -364,26 +371,6 @@ bot.on('message', async (msg) => {
             await bot.sendDocument(chatId, fileStream, {}, { filename: fileName });
         }
         console.log("[Debug] Main file sent to Telegram.");
-
-        // Wait for screenshots to complete (they likely finished during upload)
-        console.log("[Debug] Waiting for screenshots promise...");
-        screenshots = await screenshotPromise;
-        console.log(`[Debug] Screenshots ready: ${screenshots.length}`);
-
-        // Send screenshots if any
-        if (screenshots.length > 0) {
-            // Send as album
-            const mediaGroup = screenshots.map(p => ({
-                type: 'photo',
-                media: p
-            }));
-            // Media groups max 10
-            if (mediaGroup.length > 0) {
-                await bot.sendMediaGroup(chatId, mediaGroup.slice(0, 10));
-            }
-            // Cleanup screenshots
-            screenshots.forEach(p => { try { fs.unlinkSync(p); } catch (e) { } });
-        }
 
         // Cleanup thumbnails
         if (thumbPath && fs.existsSync(thumbPath)) {
