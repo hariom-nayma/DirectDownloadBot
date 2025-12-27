@@ -274,25 +274,28 @@ bot.on('message', async (msg) => {
                 });
             });
 
-            // Generate extra screenshots if enabled and is video
+            // Generate extra screenshots if enabled and is video (Async Promise)
+            let screenshotPromise = Promise.resolve([]);
             if (videoMeta && settings.screenshots) {
                 if (videoMeta.duration > 0) {
-                    console.log("[Debug] Generating extra screenshots...");
-                    await new Promise((resolve) => {
+                    console.log("[Debug] Generating 9 extra screenshots (Parallel)...");
+                    screenshotPromise = new Promise((resolve) => {
                         fluentFfmpeg(filePath)
-                            .on('end', resolve)
-                            .on('error', (e) => { console.error('Screenie error', e); resolve(); })
+                            .on('end', () => resolve(true))
+                            .on('error', (e) => { console.error('Screenie error', e); resolve(false); })
                             .screenshots({
-                                count: 5, // Reduced to 5
+                                count: 9,
+                                timestamps: ['10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%'],
                                 folder: downloadsDir,
                                 filename: 'thumb-%r.png',
                                 size: '320x240',
-                                fastSeek: true // Keyframe seek
+                                fastSeek: true
                             });
+                    }).then((success) => {
+                        if (!success) return [];
+                        const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
+                        return files.map(f => path.join(downloadsDir, f));
                     });
-
-                    const files = fs.readdirSync(downloadsDir).filter(f => f.startsWith('thumb-'));
-                    screenshots = files.map(f => path.join(downloadsDir, f));
                 }
             }
 
@@ -338,18 +341,17 @@ bot.on('message', async (msg) => {
                 height: videoMeta.height,
                 supports_streaming: true
             };
-            // Note: node-telegram-bot-api sends 'thumb' as file path if provided
-            // We need to pass the file stream for the video
-            // AND the thumbnail. The library handling of 'thumb' in opts might vary.
-            // It often expects a path or a Buffer.
             if (thumbPath && fs.existsSync(thumbPath)) {
-                opts.thumb = thumbPath; // Pass path
+                opts.thumb = thumbPath;
             }
 
             await bot.sendVideo(chatId, fileStream, opts, { filename: fileName });
         } else {
             await bot.sendDocument(chatId, fileStream, {}, { filename: fileName });
         }
+
+        // Wait for screenshots to complete (they likely finished during upload)
+        screenshots = await screenshotPromise;
 
         // Send screenshots if any
         if (screenshots.length > 0) {
