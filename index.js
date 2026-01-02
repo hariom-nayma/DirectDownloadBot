@@ -258,11 +258,11 @@ bot.onText(/\/up_(basic|premium|vip) (.+)/, (msg, match) => {
 
 bot.onText(/\/setdump (.+)/, (msg, match) => {
     if (String(msg.from.id) !== String(ADMIN_ID)) return;
-    
+
     // Normalize ID (channel IDs usually start with -100)
     let dumpId = match[1].trim();
     if (!dumpId.startsWith('-100') && !dumpId.startsWith('@')) {
-         // rough heuristic, or just trust the admin inputs the correct ID
+        // rough heuristic, or just trust the admin inputs the correct ID
     }
 
     updateSettings({ dump_channel_id: dumpId });
@@ -271,13 +271,13 @@ bot.onText(/\/setdump (.+)/, (msg, match) => {
 
 bot.onText(/\/setforce (.+)/, (msg, match) => {
     if (String(msg.from.id) !== String(ADMIN_ID)) return;
-    
+
     let forceId = match[1].trim();
     // Basic cleanup
     if (forceId.toLowerCase() === 'off' || forceId.toLowerCase() === 'disable') {
-         updateSettings({ force_channel_id: null });
-         bot.sendMessage(msg.chat.id, "✅ Force Join disabled.");
-         return;
+        updateSettings({ force_channel_id: null });
+        bot.sendMessage(msg.chat.id, "✅ Force Join disabled.");
+        return;
     }
 
     updateSettings({ force_channel_id: forceId });
@@ -301,7 +301,7 @@ async function isMember(userId) {
         // Let's return true to avoid blocking everyone if misconfigured, but log error.
         // Or return false to enforce? User asked to "force join", so better to fail safe if we can't check?
         // Actually, if we can't check, we probably shouldn't block.
-        return true; 
+        return true;
     }
     return false;
 }
@@ -311,7 +311,7 @@ async function sendForceJoinMessage(chatId) {
     const settings = getSettings();
     const forceId = settings.force_channel_id;
     let inviteLink = forceId; // Default to ID if no link known
-    
+
     // Try to make it a link if it's a username
     if (forceId.startsWith('@')) {
         inviteLink = `https://t.me/${forceId.substring(1)}`;
@@ -343,10 +343,22 @@ bot.on('callback_query', async (callbackQuery) => {
     if (data === 'check_join') {
         const allowed = await isMember(callbackQuery.from.id);
         if (allowed) {
-            bot.deleteMessage(chatId, msg.message_id).catch(e => {});
+            bot.deleteMessage(chatId, msg.message_id).catch(e => { });
             bot.sendMessage(chatId, "✅ Verified! You can now use the bot.");
         } else {
             bot.answerCallbackQuery(callbackQuery.id, { text: "❌ You haven't joined yet!", show_alert: true });
+        }
+        return;
+    }
+    
+    if (data === 'resume_mega') {
+        const user = checkPlan(chatId);
+        if (user.last_mega_job && user.last_mega_job.url) {
+            bot.deleteMessage(chatId, msg.message_id).catch(e => {});
+            bot.sendMessage(chatId, `🔄 Resuming download from file #${user.last_mega_job.processed_count + 1}...`);
+            processMegaFolder(chatId, user.last_mega_job.url, user.last_mega_job.processed_count);
+        } else {
+             bot.answerCallbackQuery(callbackQuery.id, { text: "❌ No resumable job found.", show_alert: true });
         }
         return;
     }
@@ -844,11 +856,11 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
             }
 
             const sentMsg = await bot.sendVideo(chatId, fileStream, opts, { filename: fileName });
-            
+
             // Dump Channel Forwarding
             const settings = getSettings();
             if (settings.dump_channel_id && sentMsg) {
-                 bot.copyMessage(settings.dump_channel_id, chatId, sentMsg.message_id).catch(e => console.error("Dump Error:", e.message));
+                bot.copyMessage(settings.dump_channel_id, chatId, sentMsg.message_id).catch(e => console.error("Dump Error:", e.message));
             }
 
         } else {
@@ -856,11 +868,11 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                 caption: caption
             };
             const sentMsg = await bot.sendDocument(chatId, fileStream, opts, { filename: fileName });
-             
+
             // Dump Channel Forwarding
             const settings = getSettings();
             if (settings.dump_channel_id && sentMsg) {
-                 bot.copyMessage(settings.dump_channel_id, chatId, sentMsg.message_id).catch(e => console.error("Dump Error:", e.message));
+                bot.copyMessage(settings.dump_channel_id, chatId, sentMsg.message_id).catch(e => console.error("Dump Error:", e.message));
             }
         }
         console.log("[Debug] Main file sent to Telegram.");
@@ -899,7 +911,7 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
 
 bot.onText(/\/mega (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
-    
+
     // Force Join Check
     if (!(await isMember(msg.from.id))) {
         sendForceJoinMessage(chatId);
@@ -907,13 +919,14 @@ bot.onText(/\/mega (.+)/, async (msg, match) => {
     }
 
     const urlText = match[1].trim();
-    processMegaFolder(chatId, urlText);
+    // New job starts at 0
+    processMegaFolder(chatId, urlText, 0);
 });
 
-async function processMegaFolder(chatId, folderUrl) {
+async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
     let statusMsgId = null;
     const user = checkPlan(chatId);
-    
+
     // Check Parallel Limit (Mega folder takes 1 slot)
     const limits = getPlanLimits(user.plan);
     if (!userDownloads[chatId]) userDownloads[chatId] = [];
@@ -921,6 +934,15 @@ async function processMegaFolder(chatId, folderUrl) {
         bot.sendMessage(chatId, `⚠️ *Parallel Limit Reached* (${userDownloads[chatId].length}/${limits.parallel})\nPlease wait or upgrade /plan.`, { parse_mode: 'Markdown' });
         return;
     }
+
+    // Initialize/Update Job State in DB
+    updateUser(chatId, {
+        last_mega_job: {
+            url: folderUrl,
+            processed_count: startIndex,
+            updated_at: Date.now()
+        }
+    });
 
     const jobId = Date.now().toString() + Math.random().toString(36).substring(7);
     userDownloads[chatId].push(jobId);
@@ -957,23 +979,38 @@ async function processMegaFolder(chatId, folderUrl) {
             return;
         }
 
-        bot.editMessageText(`✅ Found ${filesToProcess.length} files (${formatBytes(totalBytes)}).\nStarting sequential download...`, 
+        bot.editMessageText(`✅ Found ${filesToProcess.length} files (${formatBytes(totalBytes)}).\nStarting sequential download...`,
             { chat_id: chatId, message_id: statusMsgId });
 
         // 3. Process Sequentially
         let processedBytes = 0;
-        let processedCount = 0;
+        let processedCount = startIndex; // Start from saved index (visual count depends on this too?)
+        // Wait, if we resume, processedCount should be startIndex. 
+        // But what about processedBytes? We can't easily know previous bytes without recalc or storing.
+        // For ETA, we will just count bytes from NOW.
+
         const totalCount = filesToProcess.length;
         const startTimeGlobal = Date.now();
 
-        for (const fileNode of filesToProcess) {
+        // Loop using index to support skipping
+        for (let i = 0; i < totalCount; i++) {
+            const fileNode = filesToProcess[i];
+
+            // SKIP LOGIC
+            if (i < startIndex) {
+                // We can roughly add size to processedBytes for accurate percentage if we want, 
+                // but simplicity: just skip.
+                processedBytes += (fileNode.size || 0);
+                continue;
+            }
+
             // Check cancellation
             // (We'd need a way to cancel the whole folder job, implementing simple check here)
             // For now, simpler implementation without deep cancel integration for Mega loop
 
             const fileName = fileNode.name;
             const fileSize = fileNode.size || 0;
-            
+
             // Validate Plan Limits per file (optional, strict for now)
             const fileSizeGB = fileSize / (1024 * 1024 * 1024);
             if (fileSizeGB > limits.max_gb) {
@@ -986,21 +1023,21 @@ async function processMegaFolder(chatId, folderUrl) {
             // Update Status for Current File
             const globalPercent = totalBytes > 0 ? ((processedBytes / totalBytes) * 100).toFixed(1) : 0;
             const updateStatus = (action, speed = 0, currentPercent = 0) => {
-                 const elapsed = (Date.now() - startTimeGlobal) / 1000;
-                 const avgSpeed = elapsed > 0 ? processedBytes / elapsed : 0;
-                 const estimatedTotalTime = avgSpeed > 0 ? totalBytes / avgSpeed : 0;
-                 const remainingTime = Math.max(0, estimatedTotalTime - elapsed);
-                 
-                 const statusText = `📂 *Mega.nz Batch*\n` +
-                     `Files: ${processedCount}/${totalCount}\n` +
-                     `Total Progress: ${globalPercent}%\n` +
-                     `Size: ${formatBytes(processedBytes)} / ${formatBytes(totalBytes)}\n` +
-                     `ETA: ${formatTime(remainingTime)}\n\n` +
-                     `📄 *Current File:* ${fileName}\n` +
-                     `${action}: ${currentPercent}%\n` +
-                     `${generateProgressBar(currentPercent)}`;
-                
-                bot.editMessageText(statusText, { chat_id: chatId, message_id: statusMsgId, parse_mode: 'Markdown' }).catch(()=>{});
+                const elapsed = (Date.now() - startTimeGlobal) / 1000;
+                const avgSpeed = elapsed > 0 ? processedBytes / elapsed : 0;
+                const estimatedTotalTime = avgSpeed > 0 ? totalBytes / avgSpeed : 0;
+                const remainingTime = Math.max(0, estimatedTotalTime - elapsed);
+
+                const statusText = `📂 *Mega.nz Batch*\n` +
+                    `Files: ${processedCount}/${totalCount}\n` +
+                    `Total Progress: ${globalPercent}%\n` +
+                    `Size: ${formatBytes(processedBytes)} / ${formatBytes(totalBytes)}\n` +
+                    `ETA: ${formatTime(remainingTime)}\n\n` +
+                    `📄 *Current File:* ${fileName}\n` +
+                    `${action}: ${currentPercent}%\n` +
+                    `${generateProgressBar(currentPercent)}`;
+
+                bot.editMessageText(statusText, { chat_id: chatId, message_id: statusMsgId, parse_mode: 'Markdown' }).catch(() => { });
             };
 
             updateStatus("⬇️ Downloading");
@@ -1017,7 +1054,7 @@ async function processMegaFolder(chatId, folderUrl) {
             dlStr.on('progress', (p) => {
                 updateStatus("⬇️ Downloading", p.speed, p.percentage.toFixed(1));
             });
-            
+
             downloadStream.pipe(dlStr).pipe(writer);
 
             await new Promise((resolve, reject) => {
@@ -1028,53 +1065,80 @@ async function processMegaFolder(chatId, folderUrl) {
 
             // Upload Logic (Simplified Version of processDownload)
             updateStatus("⬆️ Uploading", 0, 0);
-            
+
             // ... (Reusing upload logic concepts)
             const upStr = progress({ length: fileSize, time: 2000 });
             upStr.on('progress', (p) => {
-                 updateStatus("⬆️ Uploading", p.speed, p.percentage.toFixed(1));
+                updateStatus("⬆️ Uploading", p.speed, p.percentage.toFixed(1));
             });
 
             const uploadStream = fs.createReadStream(tempPath).pipe(upStr);
-            
+
             // Simple Send Document/Video (Auto-detect not implemented fully to save code, defaulting to doc for safety or generic video check)
             const isVideo = ['.mp4', '.mkv', '.avi', '.mov'].includes(path.extname(tempPath).toLowerCase());
-            
+
             try {
                 let sentMsgMega = null;
                 if (isVideo) {
-                     sentMsgMega = await bot.sendVideo(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                    sentMsgMega = await bot.sendVideo(chatId, uploadStream, { caption: fileName }, { filename: fileName });
                 } else {
-                     sentMsgMega = await bot.sendDocument(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                    sentMsgMega = await bot.sendDocument(chatId, uploadStream, { caption: fileName }, { filename: fileName });
                 }
 
                 // Dump Channel Forwarding (Mega)
                 const settings = getSettings();
                 if (settings.dump_channel_id && sentMsgMega) {
-                     bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
+                    bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
                 }
 
-            } catch(e) {
+            } catch (e) {
                 bot.sendMessage(chatId, `Failed to upload ${fileName}: ${e.message}`);
             }
 
             // Cleanup
-            try { fs.unlinkSync(tempPath); } catch(e){}
-            
+            try { fs.unlinkSync(tempPath); } catch (e) { }
+
             processedCount++;
             processedBytes += fileSize;
+
+            // Update Persistence
+            updateUser(chatId, {
+                last_mega_job: {
+                    url: folderUrl,
+                    processed_count: processedCount,
+                    updated_at: Date.now()
+                }
+            });
+
         }
 
         bot.editMessageText("✅ Mega Folder Download Complete!", { chat_id: chatId, message_id: statusMsgId });
+        // Clear job
+        updateUser(chatId, { last_mega_job: null });
 
     } catch (e) {
         console.error(e);
         const text = `❌ Error: ${e.message}`;
-        if (statusMsgId) bot.editMessageText(text, { chat_id: chatId, message_id: statusMsgId });
-        else bot.sendMessage(chatId, text);
+
+        const resumeBtn = {
+            inline_keyboard: [[
+                { text: "🔄 Resume Download", callback_data: "resume_mega" }
+            ]]
+        };
+
+        if (statusMsgId) {
+            bot.editMessageText(text, {
+                chat_id: chatId,
+                message_id: statusMsgId,
+                reply_markup: resumeBtn
+            }).catch(() => { });
+        } else {
+            bot.sendMessage(chatId, text, { reply_markup: resumeBtn });
+        }
+
     } finally {
-         userDownloads[chatId] = userDownloads[chatId].filter(id => id !== jobId);
-         if (userDownloads[chatId].length === 0) delete userDownloads[chatId];
+        userDownloads[chatId] = userDownloads[chatId].filter(id => id !== jobId);
+        if (userDownloads[chatId].length === 0) delete userDownloads[chatId];
     }
 }
 
