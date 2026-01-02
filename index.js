@@ -23,7 +23,8 @@ const bot = new TelegramBot(token, {
 const fluentFfmpeg = require('fluent-ffmpeg');
 const progress = require('progress-stream');
 const https = require('https');
-const { getUser, updateUser, checkPlan } = require('./helpers');
+const { File } = require('megajs');
+const { getUser, updateUser, checkPlan, getSettings, updateSettings } = require('./helpers');
 
 // Admin ID from env
 const ADMIN_ID = process.env.ADMIN_ID;
@@ -255,10 +256,101 @@ bot.onText(/\/up_(basic|premium|vip) (.+)/, (msg, match) => {
     bot.sendMessage(targetId, `🎉 Your plan has been upgraded to *${plan.toUpperCase()}*!`, { parse_mode: 'Markdown' });
 });
 
-bot.on('callback_query', (callbackQuery) => {
+bot.onText(/\/setdump (.+)/, (msg, match) => {
+    if (String(msg.from.id) !== String(ADMIN_ID)) return;
+    
+    // Normalize ID (channel IDs usually start with -100)
+    let dumpId = match[1].trim();
+    if (!dumpId.startsWith('-100') && !dumpId.startsWith('@')) {
+         // rough heuristic, or just trust the admin inputs the correct ID
+    }
+
+    updateSettings({ dump_channel_id: dumpId });
+    bot.sendMessage(msg.chat.id, `✅ Dump Channel configured to: \`${dumpId}\`\n\nMake sure the bot is an admin there!`, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/\/setforce (.+)/, (msg, match) => {
+    if (String(msg.from.id) !== String(ADMIN_ID)) return;
+    
+    let forceId = match[1].trim();
+    // Basic cleanup
+    if (forceId.toLowerCase() === 'off' || forceId.toLowerCase() === 'disable') {
+         updateSettings({ force_channel_id: null });
+         bot.sendMessage(msg.chat.id, "✅ Force Join disabled.");
+         return;
+    }
+
+    updateSettings({ force_channel_id: forceId });
+    bot.sendMessage(msg.chat.id, `✅ Force Join Channel configured to: \`${forceId}\`\n\nMake sure the bot is an admin there to check memberships!`, { parse_mode: 'Markdown' });
+});
+
+// Helper: Check Membership
+async function isMember(userId) {
+    const settings = getSettings();
+    const forceId = settings.force_channel_id;
+    if (!forceId) return true; // Not enabled
+
+    try {
+        const member = await bot.getChatMember(forceId, userId);
+        if (['creator', 'administrator', 'member'].includes(member.status)) {
+            return true;
+        }
+    } catch (e) {
+        console.error("Force Join Check Error:", e.message);
+        // If bot isn't admin or channel invalid, fail open or closed? 
+        // Let's return true to avoid blocking everyone if misconfigured, but log error.
+        // Or return false to enforce? User asked to "force join", so better to fail safe if we can't check?
+        // Actually, if we can't check, we probably shouldn't block.
+        return true; 
+    }
+    return false;
+}
+
+// Helper: Send Force Join Message
+async function sendForceJoinMessage(chatId) {
+    const settings = getSettings();
+    const forceId = settings.force_channel_id;
+    let inviteLink = forceId; // Default to ID if no link known
+    
+    // Try to make it a link if it's a username
+    if (forceId.startsWith('@')) {
+        inviteLink = `https://t.me/${forceId.substring(1)}`;
+    } else {
+        // If ID, we can't easily guess link unless we export invite link, 
+        // but for now let's assume admin provides a public channel username or we just use the ID text (which isn't clickable).
+        // Best practice: Admin should set @username if possible.
+        // For private channels, this is harder without generating link. 
+        // Let's assume public username for now as per "add a group/channel".
+    }
+
+    bot.sendMessage(chatId, "⚠️ *Join Required*\n\nYou must join our channel to use this bot!", {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "Join Channel 🚀", url: inviteLink }],
+                [{ text: "Try Again 🔄", callback_data: "check_join" }]
+            ]
+        }
+    });
+}
+
+bot.on('callback_query', async (callbackQuery) => {
     const msg = callbackQuery.message;
     const chatId = msg.chat.id;
     const data = callbackQuery.data;
+    // const user = checkPlan(chatId); 
+
+    if (data === 'check_join') {
+        const allowed = await isMember(callbackQuery.from.id);
+        if (allowed) {
+            bot.deleteMessage(chatId, msg.message_id).catch(e => {});
+            bot.sendMessage(chatId, "✅ Verified! You can now use the bot.");
+        } else {
+            bot.answerCallbackQuery(callbackQuery.id, { text: "❌ You haven't joined yet!", show_alert: true });
+        }
+        return;
+    }
+
     const user = checkPlan(chatId);
 
     if (data === 'toggle_screenshots') {
@@ -329,6 +421,12 @@ bot.on('callback_query', (callbackQuery) => {
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
+
+    // Force Join Check
+    if (!(await isMember(msg.from.id))) {
+        sendForceJoinMessage(chatId);
+        return;
+    }
 
     // Handle Rename State
     if (setupState[chatId] && setupState[chatId].state === 'WAITING_RENAME' && text && !text.startsWith('/')) {
@@ -745,12 +843,25 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                 opts.thumb = thumbPath; // Pass path
             }
 
-            await bot.sendVideo(chatId, fileStream, opts, { filename: fileName });
+            const sentMsg = await bot.sendVideo(chatId, fileStream, opts, { filename: fileName });
+            
+            // Dump Channel Forwarding
+            const settings = getSettings();
+            if (settings.dump_channel_id && sentMsg) {
+                 bot.copyMessage(settings.dump_channel_id, chatId, sentMsg.message_id).catch(e => console.error("Dump Error:", e.message));
+            }
+
         } else {
             const opts = {
                 caption: caption
             };
-            await bot.sendDocument(chatId, fileStream, opts, { filename: fileName });
+            const sentMsg = await bot.sendDocument(chatId, fileStream, opts, { filename: fileName });
+             
+            // Dump Channel Forwarding
+            const settings = getSettings();
+            if (settings.dump_channel_id && sentMsg) {
+                 bot.copyMessage(settings.dump_channel_id, chatId, sentMsg.message_id).catch(e => console.error("Dump Error:", e.message));
+            }
         }
         console.log("[Debug] Main file sent to Telegram.");
 
@@ -781,6 +892,189 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
         delete runningJobs[jobId];
         userDownloads[chatId] = userDownloads[chatId].filter(id => id !== jobId);
         if (userDownloads[chatId].length === 0) delete userDownloads[chatId];
+    }
+}
+
+// --- Mega.nz Logic ---
+
+bot.onText(/\/mega (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    
+    // Force Join Check
+    if (!(await isMember(msg.from.id))) {
+        sendForceJoinMessage(chatId);
+        return;
+    }
+
+    const urlText = match[1].trim();
+    processMegaFolder(chatId, urlText);
+});
+
+async function processMegaFolder(chatId, folderUrl) {
+    let statusMsgId = null;
+    const user = checkPlan(chatId);
+    
+    // Check Parallel Limit (Mega folder takes 1 slot)
+    const limits = getPlanLimits(user.plan);
+    if (!userDownloads[chatId]) userDownloads[chatId] = [];
+    if (userDownloads[chatId].length >= limits.parallel) {
+        bot.sendMessage(chatId, `⚠️ *Parallel Limit Reached* (${userDownloads[chatId].length}/${limits.parallel})\nPlease wait or upgrade /plan.`, { parse_mode: 'Markdown' });
+        return;
+    }
+
+    const jobId = Date.now().toString() + Math.random().toString(36).substring(7);
+    userDownloads[chatId].push(jobId);
+
+    try {
+        const statusMsg = await bot.sendMessage(chatId, "🔄 Connecting to Mega.nz...");
+        statusMsgId = statusMsg.message_id;
+
+        // 1. Connect & Load
+        let folder;
+        try {
+            folder = File.fromURL(folderUrl);
+            await folder.loadAttributes();
+        } catch (e) {
+            throw new Error("Invalid Mega Link or API Error.");
+        }
+
+        // 2. Traverse & Count
+        let filesToProcess = [];
+        let totalBytes = 0;
+
+        function traverse(node) {
+            if (node.children) {
+                node.children.forEach(traverse);
+            } else {
+                filesToProcess.push(node);
+                totalBytes += (node.size || 0);
+            }
+        }
+        traverse(folder);
+
+        if (filesToProcess.length === 0) {
+            bot.editMessageText("⚠️ Folder is empty.", { chat_id: chatId, message_id: statusMsgId });
+            return;
+        }
+
+        bot.editMessageText(`✅ Found ${filesToProcess.length} files (${formatBytes(totalBytes)}).\nStarting sequential download...`, 
+            { chat_id: chatId, message_id: statusMsgId });
+
+        // 3. Process Sequentially
+        let processedBytes = 0;
+        let processedCount = 0;
+        const totalCount = filesToProcess.length;
+        const startTimeGlobal = Date.now();
+
+        for (const fileNode of filesToProcess) {
+            // Check cancellation
+            // (We'd need a way to cancel the whole folder job, implementing simple check here)
+            // For now, simpler implementation without deep cancel integration for Mega loop
+
+            const fileName = fileNode.name;
+            const fileSize = fileNode.size || 0;
+            
+            // Validate Plan Limits per file (optional, strict for now)
+            const fileSizeGB = fileSize / (1024 * 1024 * 1024);
+            if (fileSizeGB > limits.max_gb) {
+                bot.sendMessage(chatId, `⚠️ Skipped ${fileName}: Too large (${fileSizeGB.toFixed(2)} GB) for your plan.`);
+                processedCount++;
+                processedBytes += fileSize; // Count as processed even if skipped
+                continue;
+            }
+
+            // Update Status for Current File
+            const globalPercent = totalBytes > 0 ? ((processedBytes / totalBytes) * 100).toFixed(1) : 0;
+            const updateStatus = (action, speed = 0, currentPercent = 0) => {
+                 const elapsed = (Date.now() - startTimeGlobal) / 1000;
+                 const avgSpeed = elapsed > 0 ? processedBytes / elapsed : 0;
+                 const estimatedTotalTime = avgSpeed > 0 ? totalBytes / avgSpeed : 0;
+                 const remainingTime = Math.max(0, estimatedTotalTime - elapsed);
+                 
+                 const statusText = `📂 *Mega.nz Batch*\n` +
+                     `Files: ${processedCount}/${totalCount}\n` +
+                     `Total Progress: ${globalPercent}%\n` +
+                     `Size: ${formatBytes(processedBytes)} / ${formatBytes(totalBytes)}\n` +
+                     `ETA: ${formatTime(remainingTime)}\n\n` +
+                     `📄 *Current File:* ${fileName}\n` +
+                     `${action}: ${currentPercent}%\n` +
+                     `${generateProgressBar(currentPercent)}`;
+                
+                bot.editMessageText(statusText, { chat_id: chatId, message_id: statusMsgId, parse_mode: 'Markdown' }).catch(()=>{});
+            };
+
+            updateStatus("⬇️ Downloading");
+
+            // Download to Disk
+            const tempPath = path.join(downloadsDir, fileName.replace(/[<>:"/\\|?*]+/g, '_')); // Sanitize
+            const downloadStream = fileNode.download();
+            const writer = fs.createWriteStream(tempPath);
+
+            // Track Download Progress logic
+            // We can wrap stream in progress-stream if needed, or just rely on fileNode events if any?
+            // MegaJS stream doesn't emit progress easily, let's use progress-stream
+            const dlStr = progress({ length: fileSize, time: 2000 });
+            dlStr.on('progress', (p) => {
+                updateStatus("⬇️ Downloading", p.speed, p.percentage.toFixed(1));
+            });
+            
+            downloadStream.pipe(dlStr).pipe(writer);
+
+            await new Promise((resolve, reject) => {
+                writer.on('finish', resolve);
+                writer.on('error', reject);
+                downloadStream.on('error', reject);
+            });
+
+            // Upload Logic (Simplified Version of processDownload)
+            updateStatus("⬆️ Uploading", 0, 0);
+            
+            // ... (Reusing upload logic concepts)
+            const upStr = progress({ length: fileSize, time: 2000 });
+            upStr.on('progress', (p) => {
+                 updateStatus("⬆️ Uploading", p.speed, p.percentage.toFixed(1));
+            });
+
+            const uploadStream = fs.createReadStream(tempPath).pipe(upStr);
+            
+            // Simple Send Document/Video (Auto-detect not implemented fully to save code, defaulting to doc for safety or generic video check)
+            const isVideo = ['.mp4', '.mkv', '.avi', '.mov'].includes(path.extname(tempPath).toLowerCase());
+            
+            try {
+                let sentMsgMega = null;
+                if (isVideo) {
+                     sentMsgMega = await bot.sendVideo(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                } else {
+                     sentMsgMega = await bot.sendDocument(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                }
+
+                // Dump Channel Forwarding (Mega)
+                const settings = getSettings();
+                if (settings.dump_channel_id && sentMsgMega) {
+                     bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
+                }
+
+            } catch(e) {
+                bot.sendMessage(chatId, `Failed to upload ${fileName}: ${e.message}`);
+            }
+
+            // Cleanup
+            try { fs.unlinkSync(tempPath); } catch(e){}
+            
+            processedCount++;
+            processedBytes += fileSize;
+        }
+
+        bot.editMessageText("✅ Mega Folder Download Complete!", { chat_id: chatId, message_id: statusMsgId });
+
+    } catch (e) {
+        console.error(e);
+        const text = `❌ Error: ${e.message}`;
+        if (statusMsgId) bot.editMessageText(text, { chat_id: chatId, message_id: statusMsgId });
+        else bot.sendMessage(chatId, text);
+    } finally {
+         userDownloads[chatId] = userDownloads[chatId].filter(id => id !== jobId);
+         if (userDownloads[chatId].length === 0) delete userDownloads[chatId];
     }
 }
 

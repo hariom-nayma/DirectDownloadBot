@@ -22,6 +22,23 @@ function loadDB() {
     return dbCache;
 }
 
+function getSettings() {
+    const db = loadDB();
+    if (!db.settings) {
+        db.settings = {};
+        saveDB();
+    }
+    return db.settings;
+}
+
+function updateSettings(updates) {
+    const db = loadDB();
+    if (!db.settings) db.settings = {};
+    Object.assign(db.settings, updates);
+    saveDB();
+    return db.settings;
+}
+
 function saveDB() {
     if (!dbCache) return;
     try {
@@ -95,5 +112,7 @@ function checkPlan(userId) {
 module.exports = {
     getUser,
     updateUser,
-    checkPlan
+    checkPlan,
+    getSettings,
+    updateSettings
 };
