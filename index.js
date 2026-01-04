@@ -350,7 +350,7 @@ bot.on('callback_query', async (callbackQuery) => {
         }
         return;
     }
-    
+
     if (data === 'resume_mega') {
         const user = checkPlan(chatId);
         if (user.last_mega_job && user.last_mega_job.url) {
@@ -359,6 +359,32 @@ bot.on('callback_query', async (callbackQuery) => {
             processMegaFolder(chatId, user.last_mega_job.url, user.last_mega_job.processed_count);
         } else {
              bot.answerCallbackQuery(callbackQuery.id, { text: "❌ No resumable job found.", show_alert: true });
+        }
+        return;
+    }
+
+    if (data === 'pause_mega') {
+        // Set Pause State
+        pausedJobs[chatId] = { command: 'PAUSE' };
+        
+        // Find and Kill Active Stream to trigger loop break
+        // We need to find the job for this chat
+        const jobIds = userDownloads[chatId] || [];
+        // Just kill all running jobs for this chat (usually just one for Mega)
+        let found = false;
+        jobIds.forEach(jid => {
+            if (runningJobs[jid]) {
+                found = true;
+                const { stream } = runningJobs[jid];
+                // Destroy stream to trigger error/close in processMegaFolder
+                if (stream) stream.destroy(); 
+            }
+        });
+
+        if (!found) {
+             bot.answerCallbackQuery(callbackQuery.id, { text: "⚠️ No active job found to pause.", show_alert: true });
+        } else {
+             bot.answerCallbackQuery(callbackQuery.id, { text: "⏸️ Pausing..." });
         }
         return;
     }
@@ -907,7 +933,7 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
     }
 }
 
-// --- Mega.nz Logic ---
+const pausedJobs = {}; // { chatId: { url, processed_count, folder_data_cache? } }
 
 bot.onText(/\/mega (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
@@ -919,6 +945,10 @@ bot.onText(/\/mega (.+)/, async (msg, match) => {
     }
 
     const urlText = match[1].trim();
+
+    // Clear any previous pause state for this new link
+    if (pausedJobs[chatId]) delete pausedJobs[chatId];
+
     // New job starts at 0
     processMegaFolder(chatId, urlText, 0);
 });
@@ -946,6 +976,9 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
 
     const jobId = Date.now().toString() + Math.random().toString(36).substring(7);
     userDownloads[chatId].push(jobId);
+
+    // Control Flag for Loop
+    let isPaused = false;
 
     try {
         const statusMsg = await bot.sendMessage(chatId, "🔄 Connecting to Mega.nz...");
@@ -983,30 +1016,29 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
             { chat_id: chatId, message_id: statusMsgId });
 
         // 3. Process Sequentially
-        let processedBytes = 0;
-        let processedCount = startIndex; // Start from saved index (visual count depends on this too?)
-        // Wait, if we resume, processedCount should be startIndex. 
-        // But what about processedBytes? We can't easily know previous bytes without recalc or storing.
-        // For ETA, we will just count bytes from NOW.
+        let processedBytes = 0; // Approximate for UI
+        let processedCount = 0; // Actual iterator
 
         const totalCount = filesToProcess.length;
         const startTimeGlobal = Date.now();
 
-        // Loop using index to support skipping
+        // Loop using index
         for (let i = 0; i < totalCount; i++) {
+            // Check Pause State externally (via pausedJobs check or signal)
+            if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') {
+                isPaused = true;
+                break; // Exit loop to "Pause" state
+            }
+
             const fileNode = filesToProcess[i];
 
             // SKIP LOGIC
+            // If resuming (startIndex > 0), skip until we hit startIndex
             if (i < startIndex) {
-                // We can roughly add size to processedBytes for accurate percentage if we want, 
-                // but simplicity: just skip.
                 processedBytes += (fileNode.size || 0);
+                processedCount++;
                 continue;
             }
-
-            // Check cancellation
-            // (We'd need a way to cancel the whole folder job, implementing simple check here)
-            // For now, simpler implementation without deep cancel integration for Mega loop
 
             const fileName = fileNode.name;
             const fileSize = fileNode.size || 0;
@@ -1016,28 +1048,45 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
             if (fileSizeGB > limits.max_gb) {
                 bot.sendMessage(chatId, `⚠️ Skipped ${fileName}: Too large (${fileSizeGB.toFixed(2)} GB) for your plan.`);
                 processedCount++;
-                processedBytes += fileSize; // Count as processed even if skipped
+                processedBytes += fileSize;
                 continue;
             }
 
             // Update Status for Current File
             const globalPercent = totalBytes > 0 ? ((processedBytes / totalBytes) * 100).toFixed(1) : 0;
+
+            // Re-usable status updater
             const updateStatus = (action, speed = 0, currentPercent = 0) => {
+                // If paused, don't update UI with active stats (avoid race conditions)
+                if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') return;
+
                 const elapsed = (Date.now() - startTimeGlobal) / 1000;
                 const avgSpeed = elapsed > 0 ? processedBytes / elapsed : 0;
-                const estimatedTotalTime = avgSpeed > 0 ? totalBytes / avgSpeed : 0;
-                const remainingTime = Math.max(0, estimatedTotalTime - elapsed);
+                const estimatedTotalTime = avgSpeed > 0 ? (totalBytes - processedBytes) / avgSpeed : 0; // Remaining bytes / speed
+                const remainingTime = Math.max(0, estimatedTotalTime);
 
                 const statusText = `📂 *Mega.nz Batch*\n` +
-                    `Files: ${processedCount}/${totalCount}\n` +
+                    `Files: ${processedCount + 1}/${totalCount}\n` +
                     `Total Progress: ${globalPercent}%\n` +
-                    `Size: ${formatBytes(processedBytes)} / ${formatBytes(totalBytes)}\n` +
                     `ETA: ${formatTime(remainingTime)}\n\n` +
                     `📄 *Current File:* ${fileName}\n` +
                     `${action}: ${currentPercent}%\n` +
-                    `${generateProgressBar(currentPercent)}`;
+                    `${generateProgressBar(currentPercent)}\n` +
+                    `Speed: ${formatBytes(speed)}/s`;
 
-                bot.editMessageText(statusText, { chat_id: chatId, message_id: statusMsgId, parse_mode: 'Markdown' }).catch(() => { });
+                // Add Pause Button
+                const opts = {
+                    chat_id: chatId,
+                    message_id: statusMsgId,
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [[
+                            { text: "⏸️ Pause", callback_data: "pause_mega" }
+                        ]]
+                    }
+                };
+
+                bot.editMessageText(statusText, opts).catch(() => { });
             };
 
             updateStatus("⬇️ Downloading");
@@ -1047,26 +1096,64 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
             const downloadStream = fileNode.download();
             const writer = fs.createWriteStream(tempPath);
 
-            // Track Download Progress logic
-            // We can wrap stream in progress-stream if needed, or just rely on fileNode events if any?
-            // MegaJS stream doesn't emit progress easily, let's use progress-stream
+            // Track Download Progress & HANG DETECTION
+            let lastActivity = Date.now();
+            const HANG_TIMEOUT = 30000; // 30s timeout
+
+            // Periodic Hang Check
+            const hangCheckInterval = setInterval(() => {
+                if (Date.now() - lastActivity > HANG_TIMEOUT) {
+                    // Force kill
+                    downloadStream.emit('error', new Error("Download Hung (No Data for 30s)"));
+                }
+            }, 5000);
+
             const dlStr = progress({ length: fileSize, time: 2000 });
             dlStr.on('progress', (p) => {
+                lastActivity = Date.now();
                 updateStatus("⬇️ Downloading", p.speed, p.percentage.toFixed(1));
             });
 
+            // Store controller for PAUSE action to abort current stream
+            runningJobs[jobId] = {
+                chatId,
+                stream: downloadStream,
+                filePath: tempPath
+            };
+
+            // Pipe: Mega -> Progress -> File
             downloadStream.pipe(dlStr).pipe(writer);
 
-            await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-                downloadStream.on('error', reject);
-            });
+            try {
+                await new Promise((resolve, reject) => {
+                    writer.on('finish', resolve);
+                    writer.on('error', reject);
+                    downloadStream.on('error', reject);
 
-            // Upload Logic (Simplified Version of processDownload)
+                    // Listen for external abort (Pause)
+                    downloadStream.on('close', () => {
+                        // usage of destroy() might trigger close?
+                    });
+                });
+                clearInterval(hangCheckInterval);
+            } catch (err) {
+                clearInterval(hangCheckInterval);
+
+                // If checking pause, maybe it was aborted intentionally?
+                if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') {
+                    // It was an intentional abort
+                    isPaused = true;
+                    // Cleanup partial file
+                    try { fs.unlinkSync(tempPath); } catch (e) { };
+                    break; // Exit loop
+                }
+
+                throw err; // Real error
+            }
+
+            // Upload Logic
             updateStatus("⬆️ Uploading", 0, 0);
 
-            // ... (Reusing upload logic concepts)
             const upStr = progress({ length: fileSize, time: 2000 });
             upStr.on('progress', (p) => {
                 updateStatus("⬆️ Uploading", p.speed, p.percentage.toFixed(1));
@@ -1074,7 +1161,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
 
             const uploadStream = fs.createReadStream(tempPath).pipe(upStr);
 
-            // Simple Send Document/Video (Auto-detect not implemented fully to save code, defaulting to doc for safety or generic video check)
+            // Simple Send Document/Video
             const isVideo = ['.mp4', '.mkv', '.avi', '.mov'].includes(path.extname(tempPath).toLowerCase());
 
             try {
@@ -1085,7 +1172,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     sentMsgMega = await bot.sendDocument(chatId, uploadStream, { caption: fileName }, { filename: fileName });
                 }
 
-                // Dump Channel Forwarding (Mega)
+                // Dump Channel Forwarding
                 const settings = getSettings();
                 if (settings.dump_channel_id && sentMsgMega) {
                     bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
@@ -1109,16 +1196,29 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     updated_at: Date.now()
                 }
             });
-
         }
 
-        bot.editMessageText("✅ Mega Folder Download Complete!", { chat_id: chatId, message_id: statusMsgId });
-        // Clear job
-        updateUser(chatId, { last_mega_job: null });
+        if (isPaused) {
+            bot.editMessageText(`⏸️ *Job Paused*\n\nProcessed: ${processedCount}/${totalCount}\n\nClick Resume to continue from file #${processedCount + 1}.`, {
+                chat_id: chatId,
+                message_id: statusMsgId,
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: "▶️ Resume", callback_data: "resume_mega" }
+                    ]]
+                }
+            });
+            // State is already saved in DB (processed_count)
+        } else {
+            bot.editMessageText("✅ Mega Folder Download Complete!", { chat_id: chatId, message_id: statusMsgId });
+            // Clear job
+            updateUser(chatId, { last_mega_job: null });
+        }
 
     } catch (e) {
         console.error(e);
-        const text = `❌ Error: ${e.message}`;
+        const text = `❌ Error: ${e.message}\n\nThis might be a temporary network issue or a bad link.`;
 
         const resumeBtn = {
             inline_keyboard: [[
@@ -1139,6 +1239,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
     } finally {
         userDownloads[chatId] = userDownloads[chatId].filter(id => id !== jobId);
         if (userDownloads[chatId].length === 0) delete userDownloads[chatId];
+        delete runningJobs[jobId];
     }
 }
 
