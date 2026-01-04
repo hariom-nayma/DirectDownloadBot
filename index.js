@@ -454,6 +454,20 @@ bot.on('callback_query', async (callbackQuery) => {
     bot.answerCallbackQuery(callbackQuery.id);
 });
 
+// --- Mega.nz Logic ---
+
+bot.onText(/\/resume_mega/, async (msg) => {
+    const chatId = msg.chat.id;
+    const user = checkPlan(chatId);
+
+    if (user.last_mega_job && user.last_mega_job.url) {
+        bot.sendMessage(chatId, `🔄 Resuming download from file #${user.last_mega_job.processed_count + 1}...`);
+        processMegaFolder(chatId, user.last_mega_job.url, user.last_mega_job.processed_count);
+    } else {
+        bot.sendMessage(chatId, "❌ No resumable Mega job found.");
+    }
+});
+
 // --- main Logic ---
 
 bot.on('message', async (msg) => {
