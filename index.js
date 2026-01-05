@@ -1124,11 +1124,19 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
             const globalPercent = totalBytes > 0 ? ((processedBytes / totalBytes) * 100).toFixed(1) : 0;
 
             // Re-usable status updater
-            const updateStatus = (action, speed = 0, currentPercent = 0) => {
+            // Re-usable status updater
+            let lastUiUpdate = 0;
+            const updateStatus = (action, speed = 0, currentPercent = 0, force = false) => {
+                const now = Date.now();
+                // Throttle updates: Max once per 3s unless forced (init/complete)
+                if (!force && now - lastUiUpdate < 3000) return;
+                
+                lastUiUpdate = now;
+
                 // If paused, don't update UI with active stats (avoid race conditions)
                 if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') return;
 
-                const elapsed = (Date.now() - startTimeGlobal) / 1000;
+                const elapsed = (now - startTimeGlobal) / 1000;
                 const avgSpeed = elapsed > 0 ? processedBytes / elapsed : 0;
                 const estimatedTotalTime = avgSpeed > 0 ? (totalBytes - processedBytes) / avgSpeed : 0; // Remaining bytes / speed
                 const remainingTime = Math.max(0, estimatedTotalTime);
@@ -1154,7 +1162,10 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                     }
                 }
 
-                bot.editMessageText(statusText, opts).catch(() => { });
+                bot.editMessageText(statusText, opts).catch((e) => {
+                    // Ignore "message is not modified" errors
+                    if (!e.message.includes('message is not modified')) console.error("UI Update Error:", e.message);
+                });
             };
 
             // Download & Upload Retry Loop
