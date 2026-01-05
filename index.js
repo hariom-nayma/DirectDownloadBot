@@ -1428,3 +1428,73 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
 }
 
 console.log("Bot is running...");
+
+// System Status Command
+bot.onText(/\/status/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    // Uptime
+    const uptime = formatTime(process.uptime());
+    const osUptime = formatTime(os.uptime());
+    
+    // RAM
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memUsage = ((usedMem / totalMem) * 100).toFixed(1);
+    
+    // CPU
+    const cpus = os.cpus();
+    const cpuModel = cpus[0] ? cpus[0].model : 'Unknown';
+    const cpuCores = cpus.length;
+    const loadAvg = os.loadavg(); // [1, 5, 15] min
+    
+    // Disk (Async)
+    const getDisk = () => new Promise(resolve => {
+        if (process.platform !== 'win32') {
+            // Get stats for current directory mount
+            exec('df -h .', (err, stdout) => {
+                if (err) return resolve('Unknown');
+                const lines = stdout.trim().split('\n');
+                if (lines.length > 1) {
+                    // Usually: Filesystem Size Used Avail Use% Mounted on
+                    return resolve(lines[lines.length - 1].replace(/\s+/g, ' ')); 
+                }
+                resolve('Unknown');
+            });
+        } else {
+             exec('wmic logicaldisk get size,freespace,caption', (err, stdout) => {
+                if (err) return resolve('Windows N/A');
+                resolve(stdout.trim().split('\n').slice(1).map(l => l.trim()).join(' | '));
+             });
+        }
+    });
+    
+    const diskInfo = await getDisk();
+    
+    // Bot Stats
+    const activeJobs = Object.keys(runningJobs).length;
+    let queuedItems = 0;
+    if (userDownloads) {
+        Object.values(userDownloads).forEach(arr => queuedItems += (arr ? arr.length : 0));
+    }
+    
+    const statusMsg = `🖥️ *System Status*
+
+🕒 *Uptime:* ${uptime} (Bot)
+💻 *OS:* ${os.type()} ${os.release()} (${os.arch()})
+
+🧠 *RAM:* ${formatBytes(usedMem)} / ${formatBytes(totalMem)} (${memUsage}%)
+⚙️ *CPU:* ${cpuCores}x ${cpuModel}
+📊 *Load:* ${loadAvg.map(l => l.toFixed(2)).join(', ')}
+
+💾 *Disk:*
+\`${diskInfo}\`
+
+🤖 *Bot Performance*
+📥 Active Jobs: ${activeJobs}
+cnt Pending Queue: ${queuedItems}
+`;
+
+    bot.sendMessage(chatId, statusMsg, { parse_mode: 'Markdown' });
+});
