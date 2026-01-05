@@ -1104,109 +1104,132 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                             { text: "⏸️ Pause", callback_data: "pause_mega" }
                         ]]
                     }
-                };
+                }
 
                 bot.editMessageText(statusText, opts).catch(() => { });
             };
 
-            updateStatus("⬇️ Downloading");
-
-            // Download to Disk
+            // Download & Upload Retry Loop
+            let attempts = 0;
+            const maxAttempts = 3;
+            let success = false;
             const tempPath = path.join(downloadsDir, fileName.replace(/[<>:"/\\|?*]+/g, '_')); // Sanitize
-            const downloadStream = fileNode.download();
-            const writer = fs.createWriteStream(tempPath);
 
-            // Track Download Progress & HANG DETECTION
-            let lastActivity = Date.now();
-            const HANG_TIMEOUT = 30000; // 30s timeout
+            while (attempts < maxAttempts && !success) {
+                attempts++;
 
-            // Periodic Hang Check
-            const hangCheckInterval = setInterval(() => {
-                if (Date.now() - lastActivity > HANG_TIMEOUT) {
-                    // Force kill
-                    downloadStream.emit('error', new Error("Download Hung (No Data for 30s)"));
-                }
-            }, 5000);
-
-            const dlStr = progress({ length: fileSize, time: 2000 });
-            dlStr.on('progress', (p) => {
-                lastActivity = Date.now();
-                updateStatus("⬇️ Downloading", p.speed, p.percentage.toFixed(1));
-            });
-
-            // Store controller for PAUSE action to abort current stream
-            runningJobs[jobId] = {
-                chatId,
-                stream: downloadStream,
-                filePath: tempPath
-            };
-
-            // Pipe: Mega -> Progress -> File
-            downloadStream.pipe(dlStr).pipe(writer);
-
-            try {
-                await new Promise((resolve, reject) => {
-                    writer.on('finish', resolve);
-                    writer.on('error', reject);
-                    downloadStream.on('error', reject);
-
-                    // Listen for external abort (Pause)
-                    downloadStream.on('close', () => {
-                        // usage of destroy() might trigger close?
-                    });
-                });
-                clearInterval(hangCheckInterval);
-            } catch (err) {
-                clearInterval(hangCheckInterval);
-
-                // If checking pause, maybe it was aborted intentionally?
+                // Reset/Check pause before retry
                 if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') {
-                    // It was an intentional abort
                     isPaused = true;
-                    // Cleanup partial file
                     try { fs.unlinkSync(tempPath); } catch (e) { };
-                    break; // Exit loop
+                    break;
                 }
 
-                throw err; // Real error
+                try {
+                    updateStatus("⬇️ Downloading" + (attempts > 1 ? ` (Retry ${attempts})` : ""));
+
+                    // Download to Disk
+                    const downloadStream = fileNode.download();
+                    const writer = fs.createWriteStream(tempPath);
+
+                    // Track Download Progress & HANG DETECTION
+                    let lastActivity = Date.now();
+                    const HANG_TIMEOUT = 45000; // Increased to 45s
+
+                    const hangCheckInterval = setInterval(() => {
+                        if (Date.now() - lastActivity > HANG_TIMEOUT) {
+                            downloadStream.emit('error', new Error("Download Hung (No Data)"));
+                        }
+                    }, 5000);
+
+                    const dlStr = progress({ length: fileSize, time: 2000 });
+                    dlStr.on('progress', (p) => {
+                        lastActivity = Date.now();
+                        updateStatus("⬇️ Downloading" + (attempts > 1 ? ` (Retry ${attempts})` : ""), p.speed, p.percentage.toFixed(1));
+                    });
+
+                    // Store controller for PAUSE
+                    runningJobs[jobId] = {
+                        chatId,
+                        stream: downloadStream,
+                        filePath: tempPath
+                    };
+
+                    // Pipe: Mega -> Progress -> File
+                    downloadStream.pipe(dlStr).pipe(writer);
+
+                    await new Promise((resolve, reject) => {
+                        writer.on('finish', resolve);
+                        writer.on('error', reject);
+                        downloadStream.on('error', reject);
+                        downloadStream.on('close', () => { }); // Handle close/destroy
+                    });
+
+                    clearInterval(hangCheckInterval);
+
+                    // Upload Logic
+                    updateStatus("⬆️ Uploading", 0, 0);
+
+                    const upStr = progress({ length: fileSize, time: 2000 });
+                    upStr.on('progress', (p) => {
+                        updateStatus("⬆️ Uploading", p.speed, p.percentage.toFixed(1));
+                    });
+
+                    const uploadStream = fs.createReadStream(tempPath).pipe(upStr);
+
+                    // Simple Send Document/Video
+                    const isVideo = ['.mp4', '.mkv', '.avi', '.mov'].includes(path.extname(tempPath).toLowerCase());
+
+                    let sentMsgMega = null;
+                    if (isVideo) {
+                        sentMsgMega = await bot.sendVideo(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                    } else {
+                        sentMsgMega = await bot.sendDocument(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                    }
+
+                    // Dump Channel Forwarding
+                    const settings = getSettings();
+                    if (settings.dump_channel_id && sentMsgMega) {
+                        bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
+                    }
+
+                    success = true; // Mark as done
+
+                } catch (err) {
+                    // Ensure hangCheckInterval is cleared on error
+                    if (typeof hangCheckInterval !== 'undefined') {
+                        clearInterval(hangCheckInterval);
+                    }
+
+                    // Check if Paused (intentional abort)
+                    if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') {
+                        isPaused = true;
+                        try { fs.unlinkSync(tempPath); } catch (e) { };
+                        break; // Break retry loop, outer check will break main loop
+                    }
+
+                    console.error(`Attempt ${attempts} failed for ${fileName}:`, err.message);
+
+                    // Cleanup partial file before retry
+                    try { fs.unlinkSync(tempPath); } catch (e) { }
+
+                    if (attempts >= maxAttempts) {
+                        throw err; // Re-throw to fail this file permanently if retries exhausted
+                    }
+
+                    // Short wait before retry
+                    await new Promise(r => setTimeout(r, 2000));
+                }
             }
 
-            // Upload Logic
-            updateStatus("⬆️ Uploading", 0, 0);
-
-            const upStr = progress({ length: fileSize, time: 2000 });
-            upStr.on('progress', (p) => {
-                updateStatus("⬆️ Uploading", p.speed, p.percentage.toFixed(1));
-            });
-
-            const uploadStream = fs.createReadStream(tempPath).pipe(upStr);
-
-            // Simple Send Document/Video
-            const isVideo = ['.mp4', '.mkv', '.avi', '.mov'].includes(path.extname(tempPath).toLowerCase());
-
-            try {
-                let sentMsgMega = null;
-                if (isVideo) {
-                    sentMsgMega = await bot.sendVideo(chatId, uploadStream, { caption: fileName }, { filename: fileName });
-                } else {
-                    sentMsgMega = await bot.sendDocument(chatId, uploadStream, { caption: fileName }, { filename: fileName });
-                }
-
-                // Dump Channel Forwarding
-                const settings = getSettings();
-                if (settings.dump_channel_id && sentMsgMega) {
-                    bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
-                }
-
-            } catch (e) {
-                bot.sendMessage(chatId, `Failed to upload ${fileName}: ${e.message}`);
-            }
+            // If checking isPaused from inner loop break
+            if (isPaused) break; // Break main loop
+            if (!success) throw new Error("Max Retries Exceeded"); // Should be caught by catch block if re-thrown
 
             // Cleanup
             try { fs.unlinkSync(tempPath); } catch (e) { }
 
             processedCount++;
-            processedBytes += fileSize;
 
             // Update Persistence
             updateUser(chatId, {
