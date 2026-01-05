@@ -23,7 +23,7 @@ const bot = new TelegramBot(token, {
 const fluentFfmpeg = require('fluent-ffmpeg');
 const progress = require('progress-stream');
 const https = require('https');
-const { File } = require('megajs');
+const { File, Storage } = require('megajs');
 const { getUser, updateUser, checkPlan, getSettings, updateSettings } = require('./helpers');
 
 // Admin ID from env
@@ -459,6 +459,32 @@ bot.on('callback_query', async (callbackQuery) => {
 
 // --- Mega.nz Logic ---
 
+bot.onText(/\/login_mega (.+) (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const email = match[1].trim();
+    const password = match[2].trim();
+
+    bot.sendMessage(chatId, "🔐 Verifying credentials...");
+
+    try {
+        const storage = new Storage({ email, password });
+        await new Promise((resolve, reject) => {
+            storage.on('ready', resolve);
+            storage.on('error', reject);
+        });
+
+        updateUser(chatId, { mega_auth: { email, password } });
+        bot.sendMessage(chatId, "✅ *Mega Login Successful!*\n\nThe bot will now auto-switch to your account limit if the free limit is reached.", { parse_mode: 'Markdown' });
+    } catch (e) {
+        bot.sendMessage(chatId, `❌ Login Failed: ${e.message}`);
+    }
+});
+
+bot.onText(/\/logout_mega/, (msg) => {
+    updateUser(msg.chat.id, { mega_auth: null });
+    bot.sendMessage(msg.chat.id, "✅ Mega credentials removed.");
+});
+
 bot.onText(/\/resume_mega/, async (msg) => {
     const chatId = msg.chat.id;
     const user = checkPlan(chatId);
@@ -466,9 +492,12 @@ bot.onText(/\/resume_mega/, async (msg) => {
     if (user.last_mega_job && user.last_mega_job.url) {
         // Unpause
         if (pausedJobs[chatId]) delete pausedJobs[chatId];
+        
+        // Resume with saved state (including useAuth if it was on, or start default false)
+        const useAuth = user.last_mega_job.use_auth || false;
 
-        bot.sendMessage(chatId, `🔄 Resuming download from file #${user.last_mega_job.processed_count + 1}...`);
-        processMegaFolder(chatId, user.last_mega_job.url, user.last_mega_job.processed_count);
+        bot.sendMessage(chatId, `🔄 Resuming download from file #${user.last_mega_job.processed_count + 1}...${useAuth ? ' (Authenticated)' : ''}`);
+        processMegaFolder(chatId, user.last_mega_job.url, user.last_mega_job.processed_count, useAuth);
     } else {
         bot.sendMessage(chatId, "❌ No resumable Mega job found.");
     }
@@ -973,7 +1002,7 @@ bot.onText(/\/mega (.+)/, async (msg, match) => {
     processMegaFolder(chatId, urlText, 0);
 });
 
-async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
+async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = false) {
     let statusMsgId = null;
     const user = checkPlan(chatId);
 
@@ -990,7 +1019,8 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
         last_mega_job: {
             url: folderUrl,
             processed_count: startIndex,
-            updated_at: Date.now()
+            updated_at: Date.now(),
+            use_auth: useAuth
         }
     });
 
@@ -999,15 +1029,31 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
 
     // Control Flag for Loop
     let isPaused = false;
+    let switchedToAuth = false; // Flag to indicate we need to restart with auth
 
     try {
-        const statusMsg = await bot.sendMessage(chatId, "🔄 Connecting to Mega.nz...");
+        const statusMsg = await bot.sendMessage(chatId, `🔄 Connecting to Mega.nz...${useAuth ? ' (Authenticated)' : ''}`);
         statusMsgId = statusMsg.message_id;
 
         // 1. Connect & Load
         let folder;
+        let storage = null; // Keep reference to close if needed
+
         try {
-            folder = File.fromURL(folderUrl);
+            if (useAuth && user.mega_auth) {
+                storage = new Storage({ 
+                    email: user.mega_auth.email, 
+                    password: user.mega_auth.password 
+                });
+                await new Promise((resolve, reject) => {
+                    storage.once('ready', resolve);
+                    storage.once('error', reject);
+                });
+                folder = File.fromURL(folderUrl);
+            } else {
+                folder = File.fromURL(folderUrl);
+            }
+            
             await folder.loadAttributes();
         } catch (e) {
             throw new Error("Invalid Mega Link or API Error.");
@@ -1223,30 +1269,39 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
 
                     // SPECIFIC ERROR HANDLERS
                     if (err.message.includes("Bandwidth limit reached")) {
-                        const secondsMatch = err.message.match(/(\d+) seconds/);
-                        const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0;
-                        const waitTime = formatTime(seconds);
+                         // FALLBACK LOGIC
+                         if (!useAuth && user.mega_auth) {
+                             bot.sendMessage(chatId, "⚠️ *Bandwidth Limit Reached* on Free Quota.\n🔄 Switching to your Mega Account...", { parse_mode: 'Markdown' });
+                             switchedToAuth = true; 
+                             isPaused = true; 
+                             pausedJobs[chatId] = { command: 'SWITCH_AUTH' };
+                             break;
+                         }
 
-                        bot.sendMessage(chatId, `⏳ *Mega Bandwidth Limit Reached*\n\nThe bot has been auto-paused.\nMega requires a wait of approximately *${waitTime}*.\n\nYou can click 'Resume' later.`, { parse_mode: 'Markdown' });
-
-                        isPaused = true;
-                        // Set implicit pause state so retry loop breaks
-                        pausedJobs[chatId] = { command: 'PAUSE_AUTO' };
-                        break; // Break retry loop
+                         const secondsMatch = err.message.match(/(\d+) seconds/);
+                         const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0;
+                         const waitTime = formatTime(seconds);
+                         
+                         bot.sendMessage(chatId, `⏳ *Mega Bandwidth Limit Reached*\n\nThe bot has been auto-paused.\nMega requires a wait of approximately *${waitTime}*.\n\nYou can click 'Resume' later.`, { parse_mode: 'Markdown' });
+                         
+                         isPaused = true;
+                         // Set implicit pause state so retry loop breaks
+                         pausedJobs[chatId] = { command: 'PAUSE_AUTO' }; 
+                         break; // Break retry loop
                     }
 
                     if (attempts >= maxAttempts) {
                         // SKIP logic instead of Throw
-                        bot.sendMessage(chatId, `❌ Failed to download *${fileName}* after ${maxAttempts} attempts. Moving to next file...`, { parse_mode: 'Markdown' });
-                        // Do NOT throw. Proceed to next file.
+                         bot.sendMessage(chatId, `❌ Failed to download *${fileName}* after ${maxAttempts} attempts. Moving to next file...`, { parse_mode: 'Markdown' });
+                         // Do NOT throw. Proceed to next file.
                     } else {
                         // Short wait before retry
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
             }
-
-            // If checking isPaused from inner loop break (Manual or Auto)
+            
+            // If checking isPaused from inner loop break (Manual or Auto or Switch)
             if (isPaused) break; // Break main loop
 
             // If success is false but we finished retries, it means we SKIPPED.
@@ -1262,12 +1317,23 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                 last_mega_job: {
                     url: folderUrl,
                     processed_count: processedCount,
-                    updated_at: Date.now()
+                    updated_at: Date.now(),
+                    use_auth: useAuth
                 }
             });
         }
 
         if (isPaused) {
+            // Check for Switch
+            if (pausedJobs[chatId] && pausedJobs[chatId].command === 'SWITCH_AUTH') {
+                // Restart immediately with Auth
+                // Delete pause state so it doesn't pause new job
+                delete pausedJobs[chatId];
+                // Recursive call (async)
+                processMegaFolder(chatId, folderUrl, processedCount, true);
+                return; // Exit this instance
+            }
+
             bot.editMessageText(`⏸️ *Job Paused*\n\nProcessed: ${processedCount}/${totalCount}\n\nClick Resume to continue from file #${processedCount + 1}.`, {
                 chat_id: chatId,
                 message_id: statusMsgId,
