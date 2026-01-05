@@ -4,6 +4,8 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
+const os = require('os');
+const { exec } = require('child_process');
 
 // Replace 'YOUR_TELEGRAM_BOT_TOKEN' with your actual bot token
 // You can also set it via environment variable: process.env.BOT_TOKEN
