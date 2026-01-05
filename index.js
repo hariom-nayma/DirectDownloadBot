@@ -1188,6 +1188,13 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                         // we simply use the Authenticated API to fetch the download URL.
                         // This consumes User Quota because the request is authenticated.
                         console.log(`[Mega] Switching to Authenticated API for ${fileName}...`);
+                        
+                        // Debug Quota
+                        try {
+                             const info = await storage.getAccountInfo();
+                             console.log(`[Mega] Account Quota: Used ${formatBytes(info.used || 0)} / Total ${formatBytes(info.total || 0)}`);
+                        } catch(e) { console.warn("[Mega] Failed to check quota:", e.message); }
+
                         targetNode.api = storage.api; 
                     }
 
