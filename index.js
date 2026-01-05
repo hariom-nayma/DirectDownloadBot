@@ -1184,17 +1184,23 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
 
                     if (useAuth && storage) {
                         try {
+                            // Ensure attributes are loaded (critical for import)
+                            if (!fileNode.attributes) {
+                                await fileNode.loadAttributes().catch(() => {});
+                            }
+                            
+                            // Debug Import
+                            console.log(`[Mega] Importing ${fileNode.name} (Handle: ${fileNode.handle}) to Root...`);
+
                             // Import to Root to consume Quota (Corrected: storage.root.importFile)
-                            // If storage.root is not available immediately, we might need to ensure it's loaded.
-                            // However, 'ready' event usually ensures root is loaded.
                             if (storage.root) {
                                 importedFile = await storage.root.importFile(fileNode);
                                 targetNode = importedFile;
                             } else {
-                                console.warn("Storage root not ready, skipping import.");
+                                console.warn("[Mega] Storage root not ready, skipping import.");
                             }
                         } catch (e) {
-                            console.warn("Import failed, falling back to direct:", e.message);
+                            console.warn(`[Mega] Import failed (${e.code || 'unknown'}), falling back to direct:`, e.message);
                         }
                     }
 
