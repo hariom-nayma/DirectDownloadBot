@@ -1184,17 +1184,22 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
 
                     if (useAuth && storage) {
                         try {
-                            // Ensure attributes are loaded (critical for import)
-                            if (!fileNode.attributes) {
-                                await fileNode.loadAttributes().catch(() => {});
-                            }
-                            
                             // Debug Import
-                            console.log(`[Mega] Importing ${fileNode.name} (Handle: ${fileNode.handle}) to Root...`);
+                            console.log(`[Mega] Importing ${fileNode.name} (Handle: ${fileNode.handle})...`);
 
-                            // Import to Root to consume Quota (Corrected: storage.root.importFile)
                             if (storage.root) {
-                                importedFile = await storage.root.importFile(fileNode);
+                                // STRATEGY: Re-initialize node from Link (Fixes ENOENT/Key issues for Folder Children)
+                                let nodeToImport = fileNode;
+                                try {
+                                    const link = await fileNode.link();
+                                    console.log(`[Mega] Generated link for import: ${link}`);
+                                    nodeToImport = File.fromURL(link);
+                                    await nodeToImport.loadAttributes();
+                                } catch (e) {
+                                    console.warn(`[Mega] Failed to generate link, using original node: ${e.message}`);
+                                }
+
+                                importedFile = await storage.root.importFile(nodeToImport);
                                 targetNode = importedFile;
                             } else {
                                 console.warn("[Mega] Storage root not ready, skipping import.");
