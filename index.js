@@ -354,11 +354,14 @@ bot.on('callback_query', async (callbackQuery) => {
     if (data === 'resume_mega') {
         const user = checkPlan(chatId);
         if (user.last_mega_job && user.last_mega_job.url) {
-            bot.deleteMessage(chatId, msg.message_id).catch(e => {});
+            // Unpause
+            if (pausedJobs[chatId]) delete pausedJobs[chatId];
+
+            bot.deleteMessage(chatId, msg.message_id).catch(e => { });
             bot.sendMessage(chatId, `🔄 Resuming download from file #${user.last_mega_job.processed_count + 1}...`);
             processMegaFolder(chatId, user.last_mega_job.url, user.last_mega_job.processed_count);
         } else {
-             bot.answerCallbackQuery(callbackQuery.id, { text: "❌ No resumable job found.", show_alert: true });
+            bot.answerCallbackQuery(callbackQuery.id, { text: "❌ No resumable job found.", show_alert: true });
         }
         return;
     }
@@ -366,7 +369,7 @@ bot.on('callback_query', async (callbackQuery) => {
     if (data === 'pause_mega') {
         // Set Pause State
         pausedJobs[chatId] = { command: 'PAUSE' };
-        
+
         // Find and Kill Active Stream to trigger loop break
         // We need to find the job for this chat
         const jobIds = userDownloads[chatId] || [];
@@ -377,14 +380,14 @@ bot.on('callback_query', async (callbackQuery) => {
                 found = true;
                 const { stream } = runningJobs[jid];
                 // Destroy stream to trigger error/close in processMegaFolder
-                if (stream) stream.destroy(); 
+                if (stream) stream.destroy();
             }
         });
 
         if (!found) {
-             bot.answerCallbackQuery(callbackQuery.id, { text: "⚠️ No active job found to pause.", show_alert: true });
+            bot.answerCallbackQuery(callbackQuery.id, { text: "⚠️ No active job found to pause.", show_alert: true });
         } else {
-             bot.answerCallbackQuery(callbackQuery.id, { text: "⏸️ Pausing..." });
+            bot.answerCallbackQuery(callbackQuery.id, { text: "⏸️ Pausing..." });
         }
         return;
     }
@@ -461,6 +464,9 @@ bot.onText(/\/resume_mega/, async (msg) => {
     const user = checkPlan(chatId);
 
     if (user.last_mega_job && user.last_mega_job.url) {
+        // Unpause
+        if (pausedJobs[chatId]) delete pausedJobs[chatId];
+
         bot.sendMessage(chatId, `🔄 Resuming download from file #${user.last_mega_job.processed_count + 1}...`);
         processMegaFolder(chatId, user.last_mega_job.url, user.last_mega_job.processed_count);
     } else {
