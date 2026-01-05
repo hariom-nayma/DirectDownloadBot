@@ -1178,7 +1178,31 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                     // maxConnections: 1 (Sequential chunks prevents MAC verification errors)
                     // initialChunkSize: 256KB (Standard)
                     // chunkSize: 1MB (Standard)
-                    const downloadStream = fileNode.download({
+                    // Prepare Target Node: Direct or Imported
+                    let targetNode = fileNode;
+                    let importedFile = null;
+
+                    if (useAuth && storage) {
+                        try {
+                            // Import to Root to consume Quota (Corrected: storage.root.importFile)
+                            // If storage.root is not available immediately, we might need to ensure it's loaded.
+                            // However, 'ready' event usually ensures root is loaded.
+                            if (storage.root) {
+                                importedFile = await storage.root.importFile(fileNode);
+                                targetNode = importedFile;
+                            } else {
+                                console.warn("Storage root not ready, skipping import.");
+                            }
+                        } catch (e) {
+                            console.warn("Import failed, falling back to direct:", e.message);
+                        }
+                    }
+
+                    // Download to Disk - STABILITY PARAMS
+                    // maxConnections: 1 (Sequential chunks prevents MAC verification errors)
+                    // initialChunkSize: 256KB (Standard)
+                    // chunkSize: 1MB (Standard)
+                    const downloadStream = targetNode.download({
                         maxConnections: 1,
                         initialChunkSize: 262144,
                         chunkSize: 1048576
@@ -1220,6 +1244,11 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                     });
 
                     clearInterval(hangCheckInterval);
+
+                    // Cleanup Imported File from Cloud Drive (Important!)
+                    if (importedFile) {
+                        importedFile.delete().catch(e => console.error("Failed to delete temp imported file:", e.message));
+                    }
 
                     // Upload Logic
                     updateStatus("⬆️ Uploading", 0, 0);
