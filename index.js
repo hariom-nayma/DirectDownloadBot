@@ -1269,24 +1269,35 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
 
                     // SPECIFIC ERROR HANDLERS
                     if (err.message.includes("Bandwidth limit reached")) {
+                         // Fetch fresh user state (in case they logged in during download)
+                         const freshUser = checkPlan(chatId);
+
                          // FALLBACK LOGIC
-                         if (!useAuth && user.mega_auth) {
+                         if (!useAuth && freshUser.mega_auth) {
                              bot.sendMessage(chatId, "⚠️ *Bandwidth Limit Reached* on Free Quota.\n🔄 Switching to your Mega Account...", { parse_mode: 'Markdown' });
                              switchedToAuth = true; 
                              isPaused = true; 
                              pausedJobs[chatId] = { command: 'SWITCH_AUTH' };
                              break;
+                         } else if (useAuth) {
+                              bot.sendMessage(chatId, "⚠️ *Account Bandwidth Limit Reached*\nYour Mega account quota is also exhausted.", { parse_mode: 'Markdown' });
                          }
 
                          const secondsMatch = err.message.match(/(\d+) seconds/);
                          const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0;
                          const waitTime = formatTime(seconds);
                          
-                         bot.sendMessage(chatId, `⏳ *Mega Bandwidth Limit Reached*\n\nThe bot has been auto-paused.\nMega requires a wait of approximately *${waitTime}*.\n\nYou can click 'Resume' later.`, { parse_mode: 'Markdown' });
+                         // Only send valid wait time or generic message
+                         const waitMsg = waitTime ? `Mega requires a wait of approximately *${waitTime}*.` : "Mega has temporarily blocked this IP/Account.";
+                         
+                         bot.sendMessage(chatId, `⏳ *Mega Bandwidth Limit Reached*\n\nThe bot has been auto-paused.\n${waitMsg}\n\nYou can click 'Resume' later.`, { parse_mode: 'Markdown' });
                          
                          isPaused = true;
                          // Set implicit pause state so retry loop breaks
-                         pausedJobs[chatId] = { command: 'PAUSE_AUTO' }; 
+                         // Ensure we don't overwrite a pending switch (though break should prevent this)
+                         if (!pausedJobs[chatId] || pausedJobs[chatId].command !== 'SWITCH_AUTH') {
+                             pausedJobs[chatId] = { command: 'PAUSE_AUTO' }; 
+                         }
                          break; // Break retry loop
                     }
 
