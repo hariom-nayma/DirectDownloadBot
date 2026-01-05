@@ -1128,17 +1128,25 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                 try {
                     updateStatus("⬇️ Downloading" + (attempts > 1 ? ` (Retry ${attempts})` : ""));
 
-                    // Download to Disk
-                    const downloadStream = fileNode.download();
+                    // Download to Disk - STABILITY PARAMS
+                    // maxConnections: 1 (Sequential chunks prevents MAC verification errors)
+                    // initialChunkSize: 256KB (Standard)
+                    // chunkSize: 1MB (Standard)
+                    const downloadStream = fileNode.download({
+                        maxConnections: 1,
+                        initialChunkSize: 262144,
+                        chunkSize: 1048576
+                    });
+                    
                     const writer = fs.createWriteStream(tempPath);
 
                     // Track Download Progress & HANG DETECTION
                     let lastActivity = Date.now();
-                    const HANG_TIMEOUT = 45000; // Increased to 45s
-
+                    const HANG_TIMEOUT = 45000; // 45s timeout
+                    
                     const hangCheckInterval = setInterval(() => {
                         if (Date.now() - lastActivity > HANG_TIMEOUT) {
-                            downloadStream.emit('error', new Error("Download Hung (No Data)"));
+                             downloadStream.emit('error', new Error("Download Hung (No Data)"));
                         }
                     }, 5000);
 
@@ -1151,7 +1159,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     // Store controller for PAUSE
                     runningJobs[jobId] = {
                         chatId,
-                        stream: downloadStream,
+                        stream: downloadStream, 
                         filePath: tempPath
                     };
 
@@ -1162,9 +1170,9 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                         writer.on('finish', resolve);
                         writer.on('error', reject);
                         downloadStream.on('error', reject);
-                        downloadStream.on('close', () => { }); // Handle close/destroy
+                        downloadStream.on('close', () => {}); 
                     });
-
+                    
                     clearInterval(hangCheckInterval);
 
                     // Upload Logic
@@ -1192,7 +1200,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     if (settings.dump_channel_id && sentMsgMega) {
                         bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
                     }
-
+                    
                     success = true; // Mark as done
 
                 } catch (err) {
@@ -1204,29 +1212,33 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     // Check if Paused (intentional abort)
                     if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') {
                         isPaused = true;
-                        try { fs.unlinkSync(tempPath); } catch (e) { };
+                        try { fs.unlinkSync(tempPath); } catch (e) {};
                         break; // Break retry loop, outer check will break main loop
                     }
 
                     console.error(`Attempt ${attempts} failed for ${fileName}:`, err.message);
-
+                    
                     // Cleanup partial file before retry
                     try { fs.unlinkSync(tempPath); } catch (e) { }
 
                     if (attempts >= maxAttempts) {
-                        throw err; // Re-throw to fail this file permanently if retries exhausted
+                        // SKIP logic instead of Throw
+                         bot.sendMessage(chatId, `❌ Failed to download *${fileName}* after ${maxAttempts} attempts. Moving to next file...`, { parse_mode: 'Markdown' });
+                         // Do NOT throw. Proceed to next file.
+                    } else {
+                        // Short wait before retry
+                        await new Promise(r => setTimeout(r, 2000));
                     }
-
-                    // Short wait before retry
-                    await new Promise(r => setTimeout(r, 2000));
                 }
             }
-
+            
             // If checking isPaused from inner loop break
             if (isPaused) break; // Break main loop
-            if (!success) throw new Error("Max Retries Exceeded"); // Should be caught by catch block if re-thrown
+            
+            // If success is false but we finished retries, it means we SKIPPED.
+            // So we just continue.
 
-            // Cleanup
+            // Cleanup (if success or skipped)
             try { fs.unlinkSync(tempPath); } catch (e) { }
 
             processedCount++;
