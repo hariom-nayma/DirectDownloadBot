@@ -1178,35 +1178,17 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                     // maxConnections: 1 (Sequential chunks prevents MAC verification errors)
                     // initialChunkSize: 256KB (Standard)
                     // chunkSize: 1MB (Standard)
-                    // Prepare Target Node: Direct or Imported
+                    // Prepare Target Node
                     let targetNode = fileNode;
                     let importedFile = null;
 
                     if (useAuth && storage) {
-                        try {
-                            // Debug Import
-                            console.log(`[Mega] Importing ${fileNode.name} (Handle: ${fileNode.handle})...`);
-
-                            if (storage.root) {
-                                // STRATEGY: Re-initialize node from Link (Fixes ENOENT/Key issues for Folder Children)
-                                let nodeToImport = fileNode;
-                                try {
-                                    const link = await fileNode.link();
-                                    console.log(`[Mega] Generated link for import: ${link}`);
-                                    nodeToImport = File.fromURL(link);
-                                    await nodeToImport.loadAttributes();
-                                } catch (e) {
-                                    console.warn(`[Mega] Failed to generate link, using original node: ${e.message}`);
-                                }
-
-                                importedFile = await storage.root.importFile(nodeToImport);
-                                targetNode = importedFile;
-                            } else {
-                                console.warn("[Mega] Storage root not ready, skipping import.");
-                            }
-                        } catch (e) {
-                            console.warn(`[Mega] Import failed (${e.code || 'unknown'}), falling back to direct:`, e.message);
-                        }
+                        // API SWAP STRATEGY
+                        // Instead of importing (which fails with ENOENT for folder children), 
+                        // we simply use the Authenticated API to fetch the download URL.
+                        // This consumes User Quota because the request is authenticated.
+                        console.log(`[Mega] Switching to Authenticated API for ${fileName}...`);
+                        targetNode.api = storage.api; 
                     }
 
                     // Download to Disk - STABILITY PARAMS
@@ -1216,7 +1198,8 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                     const downloadStream = targetNode.download({
                         maxConnections: 1,
                         initialChunkSize: 262144,
-                        chunkSize: 1048576
+                        chunkSize: 1048576,
+                        forceHttps: true // Ensure HTTPS
                     });
 
                     const writer = fs.createWriteStream(tempPath);
