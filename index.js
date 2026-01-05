@@ -492,7 +492,7 @@ bot.onText(/\/resume_mega/, async (msg) => {
     if (user.last_mega_job && user.last_mega_job.url) {
         // Unpause
         if (pausedJobs[chatId]) delete pausedJobs[chatId];
-        
+
         // Resume with saved state (including useAuth if it was on, or start default false)
         const useAuth = user.last_mega_job.use_auth || false;
 
@@ -1041,9 +1041,9 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
 
         try {
             if (useAuth && user.mega_auth) {
-                storage = new Storage({ 
-                    email: user.mega_auth.email, 
-                    password: user.mega_auth.password 
+                storage = new Storage({
+                    email: user.mega_auth.email,
+                    password: user.mega_auth.password
                 });
                 await new Promise((resolve, reject) => {
                     storage.once('ready', resolve);
@@ -1053,7 +1053,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
             } else {
                 folder = File.fromURL(folderUrl);
             }
-            
+
             await folder.loadAttributes();
         } catch (e) {
             throw new Error("Invalid Mega Link or API Error.");
@@ -1188,14 +1188,20 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                         // we simply use the Authenticated API to fetch the download URL.
                         // This consumes User Quota because the request is authenticated.
                         console.log(`[Mega] Switching to Authenticated API for ${fileName}...`);
-                        
+
+                        // Debug Node Structure
+                        try {
+                            console.log(`[Mega] File Node Properties:`, Object.keys(fileNode));
+                            console.log(`[Mega] ID: ${fileNode.id}, Handle: ${fileNode.handle}, Key: ${fileNode.key ? 'Present' : 'Missing'}`);
+                        } catch (e) { }
+
                         // Debug Quota
                         try {
-                             const info = await storage.getAccountInfo();
-                             console.log(`[Mega] Account Quota: Used ${formatBytes(info.used || 0)} / Total ${formatBytes(info.total || 0)}`);
-                        } catch(e) { console.warn("[Mega] Failed to check quota:", e.message); }
+                            const info = await storage.getAccountInfo();
+                            console.log(`[Mega] Account Quota: Used ${formatBytes(info.used || 0)} / Total ${formatBytes(info.total || 0)}`);
+                        } catch (e) { console.warn("[Mega] Failed to check quota:", e.message); }
 
-                        targetNode.api = storage.api; 
+                        targetNode.api = storage.api;
                     }
 
                     // Download to Disk - STABILITY PARAMS
@@ -1299,49 +1305,49 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
 
                     // SPECIFIC ERROR HANDLERS
                     if (err.message.includes("Bandwidth limit reached")) {
-                         // Fetch fresh user state (in case they logged in during download)
-                         const freshUser = checkPlan(chatId);
+                        // Fetch fresh user state (in case they logged in during download)
+                        const freshUser = checkPlan(chatId);
 
-                         // FALLBACK LOGIC
-                         if (!useAuth && freshUser.mega_auth) {
-                             bot.sendMessage(chatId, "⚠️ *Bandwidth Limit Reached* on Free Quota.\n🔄 Switching to your Mega Account...", { parse_mode: 'Markdown' });
-                             switchedToAuth = true; 
-                             isPaused = true; 
-                             pausedJobs[chatId] = { command: 'SWITCH_AUTH' };
-                             break;
-                         } else if (useAuth) {
-                              bot.sendMessage(chatId, "⚠️ *Account Bandwidth Limit Reached*\nYour Mega account quota is also exhausted.", { parse_mode: 'Markdown' });
-                         }
+                        // FALLBACK LOGIC
+                        if (!useAuth && freshUser.mega_auth) {
+                            bot.sendMessage(chatId, "⚠️ *Bandwidth Limit Reached* on Free Quota.\n🔄 Switching to your Mega Account...", { parse_mode: 'Markdown' });
+                            switchedToAuth = true;
+                            isPaused = true;
+                            pausedJobs[chatId] = { command: 'SWITCH_AUTH' };
+                            break;
+                        } else if (useAuth) {
+                            bot.sendMessage(chatId, "⚠️ *Account Bandwidth Limit Reached*\nYour Mega account quota is also exhausted.", { parse_mode: 'Markdown' });
+                        }
 
-                         const secondsMatch = err.message.match(/(\d+) seconds/);
-                         const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0;
-                         const waitTime = formatTime(seconds);
-                         
-                         // Only send valid wait time or generic message
-                         const waitMsg = waitTime ? `Mega requires a wait of approximately *${waitTime}*.` : "Mega has temporarily blocked this IP/Account.";
-                         
-                         bot.sendMessage(chatId, `⏳ *Mega Bandwidth Limit Reached*\n\nThe bot has been auto-paused.\n${waitMsg}\n\nYou can click 'Resume' later.`, { parse_mode: 'Markdown' });
-                         
-                         isPaused = true;
-                         // Set implicit pause state so retry loop breaks
-                         // Ensure we don't overwrite a pending switch (though break should prevent this)
-                         if (!pausedJobs[chatId] || pausedJobs[chatId].command !== 'SWITCH_AUTH') {
-                             pausedJobs[chatId] = { command: 'PAUSE_AUTO' }; 
-                         }
-                         break; // Break retry loop
+                        const secondsMatch = err.message.match(/(\d+) seconds/);
+                        const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0;
+                        const waitTime = formatTime(seconds);
+
+                        // Only send valid wait time or generic message
+                        const waitMsg = waitTime ? `Mega requires a wait of approximately *${waitTime}*.` : "Mega has temporarily blocked this IP/Account.";
+
+                        bot.sendMessage(chatId, `⏳ *Mega Bandwidth Limit Reached*\n\nThe bot has been auto-paused.\n${waitMsg}\n\nYou can click 'Resume' later.`, { parse_mode: 'Markdown' });
+
+                        isPaused = true;
+                        // Set implicit pause state so retry loop breaks
+                        // Ensure we don't overwrite a pending switch (though break should prevent this)
+                        if (!pausedJobs[chatId] || pausedJobs[chatId].command !== 'SWITCH_AUTH') {
+                            pausedJobs[chatId] = { command: 'PAUSE_AUTO' };
+                        }
+                        break; // Break retry loop
                     }
 
                     if (attempts >= maxAttempts) {
                         // SKIP logic instead of Throw
-                         bot.sendMessage(chatId, `❌ Failed to download *${fileName}* after ${maxAttempts} attempts. Moving to next file...`, { parse_mode: 'Markdown' });
-                         // Do NOT throw. Proceed to next file.
+                        bot.sendMessage(chatId, `❌ Failed to download *${fileName}* after ${maxAttempts} attempts. Moving to next file...`, { parse_mode: 'Markdown' });
+                        // Do NOT throw. Proceed to next file.
                     } else {
                         // Short wait before retry
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
             }
-            
+
             // If checking isPaused from inner loop break (Manual or Auto or Switch)
             if (isPaused) break; // Break main loop
 
