@@ -1137,16 +1137,16 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                         initialChunkSize: 262144,
                         chunkSize: 1048576
                     });
-                    
+
                     const writer = fs.createWriteStream(tempPath);
 
                     // Track Download Progress & HANG DETECTION
                     let lastActivity = Date.now();
                     const HANG_TIMEOUT = 45000; // 45s timeout
-                    
+
                     const hangCheckInterval = setInterval(() => {
                         if (Date.now() - lastActivity > HANG_TIMEOUT) {
-                             downloadStream.emit('error', new Error("Download Hung (No Data)"));
+                            downloadStream.emit('error', new Error("Download Hung (No Data)"));
                         }
                     }, 5000);
 
@@ -1159,7 +1159,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     // Store controller for PAUSE
                     runningJobs[jobId] = {
                         chatId,
-                        stream: downloadStream, 
+                        stream: downloadStream,
                         filePath: tempPath
                     };
 
@@ -1170,9 +1170,9 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                         writer.on('finish', resolve);
                         writer.on('error', reject);
                         downloadStream.on('error', reject);
-                        downloadStream.on('close', () => {}); 
+                        downloadStream.on('close', () => { });
                     });
-                    
+
                     clearInterval(hangCheckInterval);
 
                     // Upload Logic
@@ -1200,7 +1200,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     if (settings.dump_channel_id && sentMsgMega) {
                         bot.copyMessage(settings.dump_channel_id, chatId, sentMsgMega.message_id).catch(e => console.error("Dump Error:", e.message));
                     }
-                    
+
                     success = true; // Mark as done
 
                 } catch (err) {
@@ -1212,29 +1212,43 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0) {
                     // Check if Paused (intentional abort)
                     if (pausedJobs[chatId] && pausedJobs[chatId].command === 'PAUSE') {
                         isPaused = true;
-                        try { fs.unlinkSync(tempPath); } catch (e) {};
-                        break; // Break retry loop, outer check will break main loop
+                        try { fs.unlinkSync(tempPath); } catch (e) { };
+                        break; // Break retry loop
                     }
 
                     console.error(`Attempt ${attempts} failed for ${fileName}:`, err.message);
-                    
+
                     // Cleanup partial file before retry
                     try { fs.unlinkSync(tempPath); } catch (e) { }
 
+                    // SPECIFIC ERROR HANDLERS
+                    if (err.message.includes("Bandwidth limit reached")) {
+                        const secondsMatch = err.message.match(/(\d+) seconds/);
+                        const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0;
+                        const waitTime = formatTime(seconds);
+
+                        bot.sendMessage(chatId, `⏳ *Mega Bandwidth Limit Reached*\n\nThe bot has been auto-paused.\nMega requires a wait of approximately *${waitTime}*.\n\nYou can click 'Resume' later.`, { parse_mode: 'Markdown' });
+
+                        isPaused = true;
+                        // Set implicit pause state so retry loop breaks
+                        pausedJobs[chatId] = { command: 'PAUSE_AUTO' };
+                        break; // Break retry loop
+                    }
+
                     if (attempts >= maxAttempts) {
                         // SKIP logic instead of Throw
-                         bot.sendMessage(chatId, `❌ Failed to download *${fileName}* after ${maxAttempts} attempts. Moving to next file...`, { parse_mode: 'Markdown' });
-                         // Do NOT throw. Proceed to next file.
+                        bot.sendMessage(chatId, `❌ Failed to download *${fileName}* after ${maxAttempts} attempts. Moving to next file...`, { parse_mode: 'Markdown' });
+                        // Do NOT throw. Proceed to next file.
                     } else {
                         // Short wait before retry
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
             }
-            
-            // If checking isPaused from inner loop break
+
+            // If checking isPaused from inner loop break (Manual or Auto)
             if (isPaused) break; // Break main loop
-            
+
             // If success is false but we finished retries, it means we SKIPPED.
             // So we just continue.
 
