@@ -803,8 +803,7 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                                     count: 1,
                                     folder: downloadsDir,
                                     filename: `cover-thumb-${jobId}.jpg`,
-                                    timemarks: ['10%'], // Take from 10% point
-                                    size: '320x240'
+                                    timemarks: ['10%'] // Take from 10% point
                                 });
                         } else {
                             resolve();
@@ -832,7 +831,6 @@ async function processDownload(chatId, urlText, customName = null, customThumb =
                                 .inputOptions([`-ss ${timestamp}`]) // Input seeking (FAST)
                                 .output(path.join(downloadsDir, filename))
                                 .frames(1)
-                                .size('320x240')
                                 .on('end', () => resolve(true))
                                 .on('error', (e) => {
                                     console.error(`[Debug] Shot ${percent}% failed:`, e.message);
