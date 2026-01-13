@@ -1268,8 +1268,53 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                         importedFile.delete().catch(e => console.error("Failed to delete temp imported file:", e.message));
                     }
 
+                    // --- Video Processing for Mega ---
+                    let videoMeta = null;
+                    let thumbPath = null;
+
+                    // Only probe if it looks like a video
+                    if (['.mp4', '.mkv', '.avi', '.mov', '.webm'].includes(path.extname(tempPath).toLowerCase())) {
+                        updateStatus("🎥 Processing metadata...", 0, 0, true);
+                        try {
+                            await new Promise((resolve) => {
+                                fluentFfmpeg.ffprobe(tempPath, (err, metadata) => {
+                                    if (err || !metadata) {
+                                        console.log("[Mega] Probing failed:", err ? err.message : "no meta");
+                                        resolve();
+                                        return;
+                                    }
+
+                                    const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+                                    if (videoStream) {
+                                        videoMeta = {
+                                            width: videoStream.width,
+                                            height: videoStream.height,
+                                            duration: Math.ceil(metadata.format.duration || 0)
+                                        };
+
+                                        // Generate Thumbnail
+                                        thumbPath = path.join(downloadsDir, `cover-thumb-${jobId}.jpg`);
+                                        fluentFfmpeg(tempPath)
+                                            .on('end', () => resolve())
+                                            .on('error', () => resolve())
+                                            .screenshots({
+                                                count: 1,
+                                                folder: downloadsDir,
+                                                filename: `cover-thumb-${jobId}.jpg`,
+                                                timemarks: ['10%'] // 10% point, full resolution
+                                            });
+                                    } else {
+                                        resolve();
+                                    }
+                                });
+                            });
+                        } catch (e) {
+                            console.error("[Mega] Metadata Error:", e.message);
+                        }
+                    }
+
                     // Upload Logic
-                    updateStatus("⬆️ Uploading", 0, 0);
+                    updateStatus("⬆️ Uploading", 0, 0, true);
 
                     const upStr = progress({ length: fileSize, time: 2000 });
                     upStr.on('progress', (p) => {
@@ -1277,15 +1322,28 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                     });
 
                     const uploadStream = fs.createReadStream(tempPath).pipe(upStr);
-
-                    // Simple Send Document/Video
-                    const isVideo = ['.mp4', '.mkv', '.avi', '.mov'].includes(path.extname(tempPath).toLowerCase());
-
+                    const isVideo = !!videoMeta;
                     let sentMsgMega = null;
+
                     if (isVideo) {
-                        sentMsgMega = await bot.sendVideo(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                        const opts = {
+                            caption: fileName,
+                            duration: videoMeta.duration,
+                            width: videoMeta.width,
+                            height: videoMeta.height,
+                            supports_streaming: true
+                        };
+                        if (thumbPath && fs.existsSync(thumbPath)) {
+                            opts.thumb = thumbPath;
+                        }
+                        sentMsgMega = await bot.sendVideo(chatId, uploadStream, opts, { filename: fileName });
                     } else {
                         sentMsgMega = await bot.sendDocument(chatId, uploadStream, { caption: fileName }, { filename: fileName });
+                    }
+
+                    // Cleanup Thumb
+                    if (thumbPath && fs.existsSync(thumbPath)) {
+                        try { fs.unlinkSync(thumbPath); } catch (e) { }
                     }
 
                     // Dump Channel Forwarding
