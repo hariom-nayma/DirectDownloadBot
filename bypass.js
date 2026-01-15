@@ -111,8 +111,8 @@ async function bypassUrl(url) {
                             await safeEvaluate(() => document.getElementById('topButton').click());
                             // Wait 15s
                             await new Promise(r => setTimeout(r, 16000));
-                        } else if (btnText.includes('Continue') || btnText.includes('Click On Ads To Get Download Button')) {
-                            // Sometimes "Click On Ads..." is clickable or turns into Continue
+                        } else if (btnText.includes('Continue') || btnText.includes('Click On Ads')) {
+                            // Relaxed check: "Click On Ads To Get Download Button" OR "Click On Ads To Get Download Link"
                             console.log("[SharClub] Clicking Continue (Phase 1)...");
                             await safeEvaluate(() => document.getElementById('topButton').click());
                             
@@ -142,7 +142,13 @@ async function bypassUrl(url) {
                             await new Promise(r => setTimeout(r, 9000));
                         } else if (btnText.includes('Next') || btnText.includes('Get Link') || btnText.includes('Click To Continue')) {
                             console.log("[SharClub] Clicking Next/Get Link/Continue...");
-                            await safeEvaluate(() => document.getElementById('bottomButton').click());
+                            await safeEvaluate(() => {
+                                const btn = document.getElementById('bottomButton');
+                                if (btn) {
+                                    btn.click();
+                                    // Sometimes it opens a new tab, we want to stay
+                                }
+                            });
                             await waitForNavigation(page);
                             continue;
                         }
@@ -153,42 +159,66 @@ async function bypassUrl(url) {
 
             // --- 24jobalert.com Logic ---
             if (currentUrl.includes('24jobalert.com')) {
-                console.log("[24jobalert] Detected. Handling AdBlock and Hidden Link...");
+                console.log("[24jobalert] Detected. Handling AdBlock and Waiting for Real Link...");
                 
-                // 1. Remove AdBlock Overlay
+                // 1. Remove AdBlock Overlay & Fix Scroll (Aggressive)
                 await safeEvaluate(() => {
                     const model = document.getElementById('AdbModel');
                     if (model) model.remove();
                     const overlay = document.querySelector('.adb-overlay');
                     if (overlay) overlay.remove();
                     document.body.style.overflow = 'auto';
+                    document.documentElement.style.overflow = 'auto';
                 });
 
-                // 2. Check for hidden #download-link
-                const hiddenLink = await safeEvaluate(() => {
-                    const div = document.getElementById('download-link');
-                    if (div) {
-                        const a = div.querySelector('a');
-                        if (a && a.href) return a.href;
+                // 2. Wait for link to become valid (poll for up to 20s)
+                let foundRealLink = null;
+                const pollStartTime = Date.now();
+                
+                while (Date.now() - pollStartTime < 20000) { // 20s timeout
+                    // Re-clean just in case
+                     await safeEvaluate(() => {
+                        const model = document.getElementById('AdbModel');
+                        if (model) model.remove();
+                    });
+
+                    foundRealLink = await safeEvaluate(() => {
+                        const div = document.getElementById('download-link');
+                        if (div) {
+                            const a = div.querySelector('a');
+                            // The placeholder link is usually "your-download-link" or contains it
+                            // We want a link that looks like a real destination (t.me, drive, mega, OR just not the current domain/placeholder)
+                            if (a && a.href && !a.href.includes('your-download-link') && !a.href.endsWith('#')) {
+                                return a.href;
+                            }
+                        }
+                        return null;
+                    });
+
+                    if (foundRealLink) {
+                        console.log(`[24jobalert] Found REAL link: ${foundRealLink}`);
+                        break;
                     }
-                    return null;
-                });
+                    
+                    // Wait 1s before next poll
+                    await new Promise(r => setTimeout(r, 1000));
+                }
 
-                if (hiddenLink) {
-                    console.log(`[24jobalert] Found hidden link: ${hiddenLink}`);
-                    // If it's the final link, we might want to just navigate to it or set it as finalLink
-                    // If it's a redirect, we navigate
-                    if (hiddenLink.includes('t.me') || hiddenLink.includes('telegram.me') || hiddenLink.includes('drive.google')) {
-                        finalLink = hiddenLink;
+                if (foundRealLink) {
+                    if (foundRealLink.includes('t.me') || foundRealLink.includes('telegram.me') || foundRealLink.includes('drive.google')) {
+                        finalLink = foundRealLink;
                         break;
                     } else {
-                         await page.goto(hiddenLink, { waitUntil: 'domcontentloaded' });
+                        // Navigate to it if it's not a direct destination (e.g. another shortener?)
+                        // But usually this IS the destination or the redirect to it.
+                         await page.goto(foundRealLink, { waitUntil: 'domcontentloaded' });
                          continue;
                     }
+                } else {
+                    console.log("[24jobalert] Timeout waiting for real link. Moving on or retrying loop...");
+                    // Just wait a bit more naturally
+                    await new Promise(r => setTimeout(r, 2000));
                 }
-                
-                // If link not found immediately, wait a bit or look for other triggers
-                await new Promise(r => setTimeout(r, 5000));
             }
 
 
