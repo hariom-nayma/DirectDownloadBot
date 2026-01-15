@@ -151,6 +151,47 @@ async function bypassUrl(url) {
             }
             // --- End Lksfy Logic ---
 
+            // --- 24jobalert.com Logic ---
+            if (currentUrl.includes('24jobalert.com')) {
+                console.log("[24jobalert] Detected. Handling AdBlock and Hidden Link...");
+                
+                // 1. Remove AdBlock Overlay
+                await safeEvaluate(() => {
+                    const model = document.getElementById('AdbModel');
+                    if (model) model.remove();
+                    const overlay = document.querySelector('.adb-overlay');
+                    if (overlay) overlay.remove();
+                    document.body.style.overflow = 'auto';
+                });
+
+                // 2. Check for hidden #download-link
+                const hiddenLink = await safeEvaluate(() => {
+                    const div = document.getElementById('download-link');
+                    if (div) {
+                        const a = div.querySelector('a');
+                        if (a && a.href) return a.href;
+                    }
+                    return null;
+                });
+
+                if (hiddenLink) {
+                    console.log(`[24jobalert] Found hidden link: ${hiddenLink}`);
+                    // If it's the final link, we might want to just navigate to it or set it as finalLink
+                    // If it's a redirect, we navigate
+                    if (hiddenLink.includes('t.me') || hiddenLink.includes('telegram.me') || hiddenLink.includes('drive.google')) {
+                        finalLink = hiddenLink;
+                        break;
+                    } else {
+                         await page.goto(hiddenLink, { waitUntil: 'domcontentloaded' });
+                         continue;
+                    }
+                }
+                
+                // If link not found immediately, wait a bit or look for other triggers
+                await new Promise(r => setTimeout(r, 5000));
+            }
+
+
 
             // --- Vplink Logic ---
             // Case A: #tp-snp2
