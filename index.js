@@ -27,6 +27,7 @@ const progress = require('progress-stream');
 const https = require('https');
 const { File, Storage } = require('megajs');
 const { getUser, updateUser, checkPlan, getSettings, updateSettings } = require('./helpers');
+const { bypassVplink } = require('./bypass');
 
 // Admin ID from env
 const ADMIN_ID = process.env.ADMIN_ID;
@@ -572,6 +573,37 @@ bot.on('message', async (msg) => {
     } catch (e) {
         // Only warn if not in a state
         if (!setupState[chatId]) bot.sendMessage(chatId, "Please send a valid HTTP/HTTPS URL.");
+        return;
+    }
+
+    // Bypass vplink.in
+    if (targetUrl.hostname.includes('vplink.in')) {
+        const processingMsg = await bot.sendMessage(chatId, "⏳ *Processing Ad-Link...* \nThis may take up to 60 seconds.", { parse_mode: 'Markdown' });
+        
+        try {
+            const finalLink = await bypassVplink(text);
+            
+            if (finalLink) {
+                 bot.editMessageText(`✅ *Bypass Successful!*\n\n🔗 [Open Link](${finalLink})\n\n\`${finalLink}\``, {
+                    chat_id: chatId,
+                    message_id: processingMsg.message_id,
+                    parse_mode: 'Markdown',
+                    disable_web_page_preview: true
+                });
+            } else {
+                bot.editMessageText("❌ *Bypass Failed.*\nCould not extract final link.", {
+                    chat_id: chatId,
+                    message_id: processingMsg.message_id,
+                    parse_mode: 'Markdown'
+                });
+            }
+        } catch (error) {
+            bot.editMessageText(`❌ *Error:* ${error.message}`, {
+                chat_id: chatId,
+                message_id: processingMsg.message_id,
+                parse_mode: 'Markdown'
+            });
+        }
         return;
     }
 
