@@ -27,7 +27,7 @@ const progress = require('progress-stream');
 const https = require('https');
 const { File, Storage } = require('megajs');
 const { getUser, updateUser, checkPlan, getSettings, updateSettings } = require('./helpers');
-const { bypassVplink } = require('./bypass');
+const { bypassUrl } = require('./bypass');
 
 // Admin ID from env
 const ADMIN_ID = process.env.ADMIN_ID;
@@ -516,10 +516,10 @@ bot.onText(/\/bypass (.+)/, async (msg, match) => {
         return;
     }
 
-    const processingMsg = await bot.sendMessage(chatId, "⏳ *Processing Ad-Link...* \nThis may take up to 60 seconds.", { parse_mode: 'Markdown' });
+    const processingMsg = await bot.sendMessage(chatId, "⏳ *Processing Link...* \nThis may take up to 60 seconds.", { parse_mode: 'Markdown' });
 
     try {
-        const finalLink = await bypassVplink(url);
+        const finalLink = await bypassUrl(url);
 
         if (finalLink) {
             bot.editMessageText(`✅ *Bypass Successful!*\n\n🔗 [Open Link](${finalLink})\n\n\`${finalLink}\``, {
@@ -1167,7 +1167,7 @@ async function processMegaFolder(chatId, folderUrl, startIndex = 0, useAuth = fa
                 const now = Date.now();
                 // Throttle updates: Max once per 3s unless forced (init/complete)
                 if (!force && now - lastUiUpdate < 3000) return;
-                
+
                 lastUiUpdate = now;
 
                 // If paused, don't update UI with active stats (avoid race conditions)
@@ -1542,19 +1542,19 @@ bot.onText(/\/status/, async (msg) => {
     // Uptime
     const uptime = formatTime(process.uptime());
     const osUptime = formatTime(os.uptime());
-    
+
     // RAM
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
     const usedMem = totalMem - freeMem;
     const memUsage = ((usedMem / totalMem) * 100).toFixed(1);
-    
+
     // CPU
     const cpus = os.cpus();
     const cpuModel = cpus[0] ? cpus[0].model : 'Unknown';
     const cpuCores = cpus.length;
     const loadAvg = os.loadavg(); // [1, 5, 15] min
-    
+
     // Disk (Async)
     const getDisk = () => new Promise(resolve => {
         if (process.platform !== 'win32') {
@@ -1564,27 +1564,27 @@ bot.onText(/\/status/, async (msg) => {
                 const lines = stdout.trim().split('\n');
                 if (lines.length > 1) {
                     // Usually: Filesystem Size Used Avail Use% Mounted on
-                    return resolve(lines[lines.length - 1].replace(/\s+/g, ' ')); 
+                    return resolve(lines[lines.length - 1].replace(/\s+/g, ' '));
                 }
                 resolve('Unknown');
             });
         } else {
-             exec('wmic logicaldisk get size,freespace,caption', (err, stdout) => {
+            exec('wmic logicaldisk get size,freespace,caption', (err, stdout) => {
                 if (err) return resolve('Windows N/A');
                 resolve(stdout.trim().split('\n').slice(1).map(l => l.trim()).join(' | '));
-             });
+            });
         }
     });
-    
+
     const diskInfo = await getDisk();
-    
+
     // Bot Stats
     const activeJobs = Object.keys(runningJobs).length;
     let queuedItems = 0;
     if (userDownloads) {
         Object.values(userDownloads).forEach(arr => queuedItems += (arr ? arr.length : 0));
     }
-    
+
     const statusMsg = `🖥️ *System Status*
 
 🕒 *Uptime:* ${uptime} (Bot)

@@ -2,7 +2,7 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-async function bypassVplink(url) {
+async function bypassUrl(url) {
     console.log(`[Bypass] Starting bypass for: ${url}`);
     let browser = null;
     try {
@@ -13,7 +13,6 @@ async function bypassVplink(url) {
 
         const page = await browser.newPage();
         
-        // Optimize: Block resources to speed up
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -32,7 +31,7 @@ async function bypassVplink(url) {
 
         let finalLink = null;
         let attempts = 0;
-        const maxAttempts = 30; // Increased attempts
+        const maxAttempts = 50; // Increased for multi-step
 
         while (attempts < maxAttempts && !finalLink) {
             attempts++;
@@ -50,8 +49,8 @@ async function bypassVplink(url) {
             
             console.log(`[Bypass] Step ${attempts}: ${currentUrl}`);
 
-            // 0. Check if we are already at a Telegram link or similar final destination
-            if (currentUrl.includes('t.me') || currentUrl.includes('telegram.me')) {
+            // 0. Check Destination
+            if (currentUrl.includes('t.me') || currentUrl.includes('telegram.me') || currentUrl.includes('drive.google')) {
                 finalLink = currentUrl;
                 break;
             }
@@ -69,7 +68,7 @@ async function bypassVplink(url) {
                 }
             };
 
-            // check for "Get Link" anchor which might be the final step on vplink page
+            // 1. Check for Generic "Get Link" (vplink style)
             const foundLink = await safeEvaluate(() => {
                 const links = Array.from(document.querySelectorAll('a'));
                 const target = links.find(a => 
@@ -84,13 +83,74 @@ async function bypassVplink(url) {
                 break;
             }
 
-            // Identify Page Type and Actions
+            // --- Lksfy / SharClub Logic (4 Steps) ---
+            if (currentUrl.includes('sharclub.in')) {
+                // Remove Ads
+                await safeEvaluate(() => {
+                     const overlays = Array.from(document.querySelectorAll('div, section')).filter(el => {
+                        const style = window.getComputedStyle(el);
+                        return style.position === 'fixed' || style.position === 'absolute' || style.zIndex > 100;
+                     });
+                     overlays.forEach(el => el.remove());
+                     const iframes = document.querySelectorAll('iframe');
+                     iframes.forEach(el => el.remove());
+                });
 
-            // Case A: #tp-snp2 (Generic "Continue" on blogs)
+                // Step A: Click Top Button (Human Verification)
+                const topBtn = await page.$('#topButton');
+                if (topBtn) {
+                    try {
+                        const btnText = await safeEvaluate(() => document.getElementById('topButton').innerText);
+                        console.log(`[SharClub] Top Button Text: ${btnText}`);
+
+                        if (btnText.includes('Human Verification') || btnText.includes('Human Veification')) {
+                            console.log("[SharClub] Clicking Human Verification...");
+                            await safeEvaluate(() => document.getElementById('topButton').click());
+                            // Wait 15s
+                            await new Promise(r => setTimeout(r, 16000));
+                        } else if (btnText.includes('Continue')) {
+                            console.log("[SharClub] Clicking Continue (Phase 1)...");
+                            await safeEvaluate(() => document.getElementById('topButton').click());
+                            
+                            // Now we need to scroll down and find bottomButton
+                            await new Promise(r => setTimeout(r, 2000));
+                        }
+                    } catch(e) { console.log("Top Button Error:", e.message); }
+                }
+
+                // Step B: Click Bottom Button (Generate Link)
+                const bottomBtn = await page.$('#bottomButton');
+                if (bottomBtn) {
+                     try {
+                        // Scroll to bottom
+                        await safeEvaluate(() => window.scrollTo(0, document.body.scrollHeight));
+                        
+                        const btnText = await safeEvaluate(() => document.getElementById('bottomButton').innerText);
+                        console.log(`[SharClub] Bottom Button Text: ${btnText}`);
+
+                        if (btnText.includes('Generating Link')) {
+                            console.log("[SharClub] Clicking Generating Link...");
+                            await safeEvaluate(() => document.getElementById('bottomButton').click());
+                            // Wait 8s
+                            await new Promise(r => setTimeout(r, 9000));
+                        } else if (btnText.includes('Next') || btnText.includes('Get Link')) {
+                            console.log("[SharClub] Clicking Next/Get Link...");
+                            await safeEvaluate(() => document.getElementById('bottomButton').click());
+                            await waitForNavigation(page);
+                            continue;
+                        }
+                     } catch(e) { console.log("Bottom Button Error:", e.message); }
+                }
+            }
+            // --- End Lksfy Logic ---
+
+
+            // --- Vplink Logic ---
+            // Case A: #tp-snp2
             const tpSnp2 = await page.$('#tp-snp2');
             if (tpSnp2) {
                 try {
-                    console.log("Found #tp-snp2, scrolling and clicking...");
+                    console.log("[Vplink] Found #tp-snp2, scrolling and clicking...");
                     await safeEvaluate(() => {
                         const el = document.getElementById('tp-snp2');
                         if(el) { el.scrollIntoView(); el.click(); }
@@ -100,19 +160,14 @@ async function bypassVplink(url) {
                 } catch(e) { console.log("Click failed:", e.message); }
             }
 
-            // Case B: #btn6 (Verify - Step 1/3)
+            // Case B: #btn6
             const btn6 = await page.$('#btn6');
             if (btn6) {
                 try {
-                    console.log("Found #btn6 (Verify), clicking...");
+                    console.log("[Vplink] Found #btn6, clicking...");
                     await safeEvaluate(() => document.getElementById('btn6').click());
-                    
-                    // Wait for timer
-                    console.log("Waiting for countdown...");
                     await new Promise(r => setTimeout(r, 11000));
-
-                    // Click #btn7 (Continue)
-                    console.log("Attempting check for #btn7...");
+                    console.log("[Vplink] Clicking #btn7...");
                     await safeEvaluate(() => {
                          const btn = document.getElementById('btn7');
                          if(btn) btn.click();
@@ -122,19 +177,14 @@ async function bypassVplink(url) {
                 } catch (e) { console.log("Step 1 interaction failed:", e.message); }
             }
 
-            // Case C: #startCountdownBtn (Verify - Step 2/3)
+            // Case C: #startCountdownBtn
             const startBtn = await page.$('#startCountdownBtn');
             if (startBtn) {
                 try {
-                    console.log("Found #startCountdownBtn, clicking...");
+                    console.log("[Vplink] Found #startCountdownBtn, clicking...");
                     await safeEvaluate(() => document.getElementById('startCountdownBtn').click());
-                    
-                    // Wait for timer
-                    console.log("Waiting for countdown...");
                     await new Promise(r => setTimeout(r, 11000));
-
-                    // Click #cross-snp2 (Continue)
-                    console.log("Attempting check for #cross-snp2...");
+                    console.log("[Vplink] Clicking #cross-snp2...");
                     await safeEvaluate(() => {
                         const btn = document.getElementById('cross-snp2');
                         if(btn) btn.click();
@@ -143,8 +193,6 @@ async function bypassVplink(url) {
                     continue;
                 } catch (e) { console.log("Step 2 interaction failed:", e.message); }
             }
-        
-            // Fail safe wait
         }
 
         return finalLink;
@@ -161,8 +209,8 @@ async function waitForNavigation(page) {
     try {
         await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 5000 });
     } catch (e) {
-        // Ignore timeout, we just wait a bit
+        // Ignore timeout
     }
 }
 
-module.exports = { bypassVplink };
+module.exports = { bypassUrl };
