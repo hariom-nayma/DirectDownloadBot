@@ -94,6 +94,9 @@ async function bypassUrl(url) {
                      overlays.forEach(el => el.remove());
                      const iframes = document.querySelectorAll('iframe');
                      iframes.forEach(el => el.remove());
+                     
+                     // Try to ensure body is scrollable
+                     document.body.style.overflow = 'auto';
                 });
 
                 // Step A: Click Top Button (Human Verification)
@@ -108,12 +111,16 @@ async function bypassUrl(url) {
                             await safeEvaluate(() => document.getElementById('topButton').click());
                             // Wait 15s
                             await new Promise(r => setTimeout(r, 16000));
-                        } else if (btnText.includes('Continue')) {
+                        } else if (btnText.includes('Continue') || btnText.includes('Click On Ads To Get Download Button')) {
+                            // Sometimes "Click On Ads..." is clickable or turns into Continue
                             console.log("[SharClub] Clicking Continue (Phase 1)...");
                             await safeEvaluate(() => document.getElementById('topButton').click());
                             
                             // Now we need to scroll down and find bottomButton
                             await new Promise(r => setTimeout(r, 2000));
+                        } else if (btnText.includes('Scroll Down Link is Ready')) {
+                             // This is just a label, ignore and check bottom
+                             console.log("[SharClub] Top says ready, checking bottom...");
                         }
                     } catch(e) { console.log("Top Button Error:", e.message); }
                 }
@@ -133,8 +140,8 @@ async function bypassUrl(url) {
                             await safeEvaluate(() => document.getElementById('bottomButton').click());
                             // Wait 8s
                             await new Promise(r => setTimeout(r, 9000));
-                        } else if (btnText.includes('Next') || btnText.includes('Get Link')) {
-                            console.log("[SharClub] Clicking Next/Get Link...");
+                        } else if (btnText.includes('Next') || btnText.includes('Get Link') || btnText.includes('Click To Continue')) {
+                            console.log("[SharClub] Clicking Next/Get Link/Continue...");
                             await safeEvaluate(() => document.getElementById('bottomButton').click());
                             await waitForNavigation(page);
                             continue;
