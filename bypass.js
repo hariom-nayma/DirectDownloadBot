@@ -175,30 +175,43 @@ async function bypassUrl(url) {
                     // A. Smart Button Clicking (Sharclub/Lksfy/24jobalert)
                     const clicked = await page.evaluate(() => {
                         const isVisible = (el) => el && el.offsetParent !== null;
-                        
-                        // 1. Check Bottom Button (Primary for Sharclub)
-                        const bottomBtn = document.getElementById('bottomButton');
-                        if (isVisible(bottomBtn)) {
-                            const text = bottomBtn.innerText || '';
-                            // Click if it looks like a navigation button
-                            if (text.includes('Get Link') || text.includes('Next') || text.includes('Continue') || text.includes('Generating') || text.includes('Download')) {
-                                bottomBtn.click();
-                                return `Bottom Button: ${text}`;
-                            }
-                        }
 
-                        // 2. Check Top Button
+                        // 1. Check Top Button (Priority 1: Verification/Continue)
                         const topBtn = document.getElementById('topButton');
                         if (isVisible(topBtn)) {
-                            const text = topBtn.innerText || '';
-                            // CRITICAL: Ignore "Scroll Down Link is Ready" label
-                            if (!text.includes('Scroll Down') && !text.includes('Link is Ready')) {
+                            const text = (topBtn.innerText || '').trim();
+                            // Click if it's an action button, NOT just a label
+                            // Valid: "Human Verification", "Human Verifcation", "Continue"
+                            // Invalid: "Scroll Down Link is Ready", "Please Wait"
+                            if (text.includes('Human Verif') || (text.includes('Continue') && !text.includes('Click To'))) {
                                 topBtn.click();
                                 return `Top Button: ${text}`;
                             }
                         }
 
-                        // 3. Check specific IDs
+                        // 2. Check Bottom Button (Priority 2: Progression)
+                        const bottomBtn = document.getElementById('bottomButton');
+                        if (isVisible(bottomBtn)) {
+                            const text = (bottomBtn.innerText || '').trim();
+                            // Valid: "Get Link", "Next", "Click To Continue", "Generating Link", "Download"
+                            if (text.includes('Get Link') || text.includes('Next') || text.includes('Click To Continue') || text.includes('Generating') || text.includes('Download')) {
+                                bottomBtn.click();
+                                return `Bottom Button: ${text}`;
+                            }
+                        }
+
+                        // 3. Fallback: Check Top Button again for other valid texts if nothing else matched
+                        // (e.g. maybe just "Continue" appeared later)
+                        if (isVisible(topBtn)) {
+                            const text = (topBtn.innerText || '').trim();
+                            if (!text.includes('Scroll Down') && !text.includes('Link is Ready') && !text.includes('Please Wait')) {
+                                // Only click if we didn't click it in step 1 (implied by return)
+                                topBtn.click();
+                                return `Top Button (Fallback): ${text}`;
+                            }
+                        }
+
+                        // 4. Check specific IDs
                         const btn6 = document.getElementById('btn6');
                         if (isVisible(btn6)) { btn6.click(); return 'btn6'; }
 
@@ -217,21 +230,21 @@ async function bypassUrl(url) {
                     // A2. Check for New Tabs (Popups) - CRITICAL for final link
                     const pages = await browser.pages();
                     if (pages.length > 2) { // 1 is about:blank, 2 is current page. So > 2 means new tab?
-                         // Actually puppeteer usually has 1 page initially.
-                         // Let's filter for relevant pages
-                         const newPage = pages.find(p => {
-                             const pUrl = p.url();
-                             return pUrl !== 'about:blank' && 
-                                    !pUrl.includes('sharclub.in') && 
-                                    !pUrl.includes('lksfy.com') && 
-                                    !pUrl.includes('24jobalert.com') &&
-                                    !pUrl.includes('google') // ads
-                         });
-                         if (newPage) {
-                             console.log(`[Bypass] Detected new tab with URL: ${newPage.url()}`);
-                             foundRealLink = newPage.url();
-                             break;
-                         }
+                        // Actually puppeteer usually has 1 page initially.
+                        // Let's filter for relevant pages
+                        const newPage = pages.find(p => {
+                            const pUrl = p.url();
+                            return pUrl !== 'about:blank' &&
+                                !pUrl.includes('sharclub.in') &&
+                                !pUrl.includes('lksfy.com') &&
+                                !pUrl.includes('24jobalert.com') &&
+                                !pUrl.includes('google') // ads
+                        });
+                        if (newPage) {
+                            console.log(`[Bypass] Detected new tab with URL: ${newPage.url()}`);
+                            foundRealLink = newPage.url();
+                            break;
+                        }
                     }
 
                     // B. Check for the link
