@@ -175,7 +175,12 @@ async function bypassUrl(url) {
                     // A. Check for "Step X/4" Button (Sharclub/Lksfy flow)
                     const stepBtn = await page.$('#topButton, #btn6, #startCountdownBtn');
                     if (stepBtn) {
-                        console.log("[Bypass] Found Step Button. Clicking...");
+                        const btnText = await safeEvaluate(() => {
+                            const el = document.querySelector('#topButton, #btn6, #startCountdownBtn');
+                            return el ? el.innerText : 'Unknown';
+                        });
+                        console.log(`[Bypass] Found Step Button: "${btnText}" Clicking...`);
+
                         try {
                             await page.evaluate(() => {
                                 // Click known buttons
@@ -189,6 +194,26 @@ async function bypassUrl(url) {
                             // Wait for navigation or potential new tab
                             await new Promise(r => setTimeout(r, 8000));
                         } catch (e) { console.log("Step click failed:", e.message); }
+                    }
+
+                    // A2. Check for New Tabs (Popups) - CRITICAL for final link
+                    const pages = await browser.pages();
+                    if (pages.length > 2) { // 1 is about:blank, 2 is current page. So > 2 means new tab?
+                         // Actually puppeteer usually has 1 page initially.
+                         // Let's filter for relevant pages
+                         const newPage = pages.find(p => {
+                             const pUrl = p.url();
+                             return pUrl !== 'about:blank' && 
+                                    !pUrl.includes('sharclub.in') && 
+                                    !pUrl.includes('lksfy.com') && 
+                                    !pUrl.includes('24jobalert.com') &&
+                                    !pUrl.includes('google') // ads
+                         });
+                         if (newPage) {
+                             console.log(`[Bypass] Detected new tab with URL: ${newPage.url()}`);
+                             foundRealLink = newPage.url();
+                             break;
+                         }
                     }
 
                     // B. Check for the link
