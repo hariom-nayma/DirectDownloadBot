@@ -168,6 +168,7 @@ async function bypassUrl(url) {
                 });
 
                 // 2. Poll for interactions
+                let foundRealLink = null;
                 const pollStartTime = Date.now();
                 while (Date.now() - pollStartTime < 45000) { // 45s timeout
 
@@ -227,6 +228,9 @@ async function bypassUrl(url) {
                     if (placeholder && placeholder.includes('your-download-link')) {
                         throw new Error("Bypass Failed: Site returned placeholder link 'your-download-link'.");
                     }
+                } else {
+                    finalLink = foundRealLink;
+                    break;
                 }
             }
 
