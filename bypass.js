@@ -105,7 +105,7 @@ async function bypassUrl(url) {
                 // 2. Poll for interactions
                 let foundRealLink = null;
                 const pollStartTime = Date.now();
-                while (Date.now() - pollStartTime < 120000) { // Increased to 120s for 4 steps
+                while (Date.now() - pollStartTime < 300000) { // Increased to 300s for 4 steps
 
                     // A. Smart Button Clicking
                     const clicked = await page.evaluate(() => {
