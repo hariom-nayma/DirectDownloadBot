@@ -159,16 +159,19 @@ async function bypassUrl(url) {
                         if (isVisible(startBtn)) { startBtn.click(); return 'startCountdownBtn'; }
 
                         // 5. Generic Fallback: Search for ANY "Get Link" button if specific IDs fail
-                        // (Useful for final Lksfy page if ID is different)
+                         // 5. Generic Fallback (Case Insensitive)
+                        // Useful for final Lksfy page where ID might differ
                         const allButtons = Array.from(document.querySelectorAll('button, a, div[role="button"], input[type="button"], input[type="submit"]'));
-                        const genericGetLink = allButtons.find(el => {
-                            if (!isVisible(el)) return false;
-                            const t = (el.innerText || el.value || '').trim();
-                            return t.includes('Get Link') || t.includes('Get Download Link');
+                        const visibleButtons = allButtons.filter(el => isVisible(el));
+                        
+                        const genericGetLink = visibleButtons.find(el => {
+                            const t = (el.innerText || el.value || '').trim().toLowerCase();
+                            return t.includes('get link') || t.includes('get download link') || t.includes('download link');
                         });
+                        
                         if (genericGetLink) {
                             genericGetLink.click();
-                            return `Generic Button: ${(genericGetLink.innerText || '').trim()}`;
+                            return `Generic Button: ${(genericGetLink.innerText || genericGetLink.value || '').trim()}`;
                         }
 
                         return null;
@@ -181,10 +184,8 @@ async function bypassUrl(url) {
                             await new Promise(r => setTimeout(r, 2000));
                         } else {
                             // We clicked something
-                            // Wait for navigation or countdown
-                            // User said: Continue (after 15s), 8s timer, etc.
-                            // 10s is a safe middle ground
-                            await new Promise(r => setTimeout(r, 10000));
+                            // Wait for navigation or countdown (Reduced to 5s for speed)
+                            await new Promise(r => setTimeout(r, 5000));
                         }
                     }
 
