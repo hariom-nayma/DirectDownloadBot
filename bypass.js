@@ -158,36 +158,39 @@ async function bypassUrl(url) {
             // --- End Lksfy Logic ---
 
             // --- 24jobalert.com Logic ---
-            if (currentUrl.includes('24jobalert.com')) {
-                console.log("[24jobalert] Detected. Handling with minimal interference...");
-                
-                // 1. Initial cleanup (minimal)
-                await safeEvaluate(() => {
-                     // Only remove the big modal, leave iframes alone as they might control timer
-                    const model = document.getElementById('AdbModel');
-                    if (model) model.remove();
-                    const backdrop = document.querySelector('.modal-backdrop');
-                    if (backdrop) backdrop.remove();
-                    document.body.style.overflow = 'auto';
-                    
-                    // Make sure link container is visible
-                    const dl = document.getElementById('download-link');
-                    if (dl) {
-                        dl.style.display = 'block';
-                        dl.style.visibility = 'visible';
-                    }
+            if (currentUrl.includes('24jobalert.com') || currentUrl.includes('sharclub.in') || currentUrl.includes('lksfy.com')) {
+                console.log(`[Bypass] Processing: ${currentUrl}`);
+
+                // 1. Force unhide the download link (standard rewarded ad bypass)
+                await page.evaluate(() => {
+                    const box = document.getElementById('download-link');
+                    if (box) box.style.display = 'block';
                 });
 
-                // 2. Loop to find link or interact
-                let foundRealLink = null;
+                // 2. Poll for interactions
                 const pollStartTime = Date.now();
-                
                 while (Date.now() - pollStartTime < 45000) { // 45s timeout
-                    
-                    // A. Check for New Tabs (Popups)
-                    // Sometimes the destination opens in a new tab
-                    // Logic for 24jobalert main loop
 
+                    // A. Check for "Step X/4" Button (Sharclub/Lksfy flow)
+                    const stepBtn = await page.$('#topButton, #btn6, #startCountdownBtn');
+                    if (stepBtn) {
+                        console.log("[Bypass] Found Step Button. Clicking...");
+                        try {
+                            await page.evaluate(() => {
+                                // Click known buttons
+                                const b1 = document.getElementById('topButton');
+                                if (b1) b1.click();
+                                const b2 = document.getElementById('btn6');
+                                if (b2) b2.click();
+                                const b3 = document.getElementById('startCountdownBtn');
+                                if (b3) b3.click();
+                            });
+                            // Wait for navigation or potential new tab
+                            await new Promise(r => setTimeout(r, 8000));
+                        } catch (e) { console.log("Step click failed:", e.message); }
+                    }
+
+                    // B. Check for the link
                     const extractedLink = await page.evaluate(() => {
                         const a = document.querySelector('#download-link a');
                         return a ? a.href : null;
@@ -195,55 +198,35 @@ async function bypassUrl(url) {
 
                     if (extractedLink) {
                         if (extractedLink.includes('your-download-link')) {
-                            console.log('[24jobalert] Found placeholder link. Waiting/Retrying...');
-                            // Provide a chance for it to change (unlikely based on analysis, but safe)
+                            console.log('[Bypass] Found placeholder link. Waiting/Retrying...');
                             await new Promise(r => setTimeout(r, 2000));
                             continue;
                         }
-                        console.log(`[24jobalert] Found potential real link: ${extractedLink}`);
+                        console.log(`[Bypass] Found potential real link: ${extractedLink}`);
                         foundRealLink = extractedLink;
                         break;
                     }
 
-                    // Check if we navigated away (unlikely if we didn't click)
+                    // C. Check if we navigated away
                     const currentUrlNow = page.url();
-                    if (!currentUrlNow.includes('24jobalert.com')) {
-                        try {
-                            await safeEvaluate(() => {
-                                // Close buttons
-                                const closeBtns = document.querySelectorAll('.close-btn, .close, button.close, [aria-label="Close"]');
-                                closeBtns.forEach(b => b.click());
-                                
-                                // "Click to generate" type buttons?
-                                // Only click if it's NOT the your-download-link anchor (unless we are desperate?)
-                                // Let's avoid clicking the placeholder for now, rely on script/timer.
-                                // But if 20s pass and nothing, maybe click it.
-                            });
-                        } catch(e) {}
-                    }
-                    
-                    // F. Click placeholder as last resort (after 10s)
-                    if (Date.now() - pollStartTime > 10000 && (Date.now() - pollStartTime) % 5000 < 500) {
-                         console.log("[24jobalert] Trying to click placeholder link...");
-                         await safeEvaluate(() => {
-                             const dl = document.getElementById('download-link');
-                             if (dl) {
-                                 const a = dl.querySelector('a');
-                                 if (a) a.click();
-                             }
-                         });
+                    if (!currentUrlNow.includes('24jobalert.com') && !currentUrlNow.includes('sharclub.in') && !currentUrlNow.includes('lksfy.com')) {
+                        console.log(`[Bypass] Navigated to: ${currentUrlNow}`);
+                        foundRealLink = currentUrlNow;
+                        break;
                     }
 
-                    await new Promise(r => setTimeout(r, 1000));
+                    await new Promise(r => setTimeout(r, 2000));
                 }
 
-                if (foundRealLink) {
-                    finalLink = foundRealLink;
-                    break;
-                } else {
-                    console.log("[24jobalert] Timeout.");
-                    // Fallback to whatever URL we are on? No.
-                    await new Promise(r => setTimeout(r, 2000));
+                if (!foundRealLink) {
+                    // One last check for placeholder error
+                    const placeholder = await page.evaluate(() => {
+                        const a = document.querySelector('#download-link a');
+                        return a ? a.href : null;
+                    });
+                    if (placeholder && placeholder.includes('your-download-link')) {
+                        throw new Error("Bypass Failed: Site returned placeholder link 'your-download-link'.");
+                    }
                 }
             }
 
