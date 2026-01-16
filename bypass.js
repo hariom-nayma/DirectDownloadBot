@@ -83,96 +83,31 @@ async function bypassUrl(url) {
                 break;
             }
 
-            // --- Lksfy / SharClub Logic (4 Steps) ---
-            if (currentUrl.includes('sharclub.in')) {
-                // Remove Ads
-                await safeEvaluate(() => {
-                    const overlays = Array.from(document.querySelectorAll('div, section')).filter(el => {
-                        const style = window.getComputedStyle(el);
-                        return style.position === 'fixed' || style.position === 'absolute' || style.zIndex > 100;
-                    });
-                    overlays.forEach(el => el.remove());
-                    const iframes = document.querySelectorAll('iframe');
-                    iframes.forEach(el => el.remove());
-
-                    // Try to ensure body is scrollable
-                    document.body.style.overflow = 'auto';
-                });
-
-                // Step A: Click Top Button (Human Verification)
-                const topBtn = await page.$('#topButton');
-                if (topBtn) {
-                    try {
-                        const btnText = await safeEvaluate(() => document.getElementById('topButton').innerText);
-                        console.log(`[SharClub] Top Button Text: ${btnText}`);
-
-                        if (btnText.includes('Human Verification') || btnText.includes('Human Veification')) {
-                            console.log("[SharClub] Clicking Human Verification...");
-                            await safeEvaluate(() => document.getElementById('topButton').click());
-                            // Wait 15s
-                            await new Promise(r => setTimeout(r, 16000));
-                        } else if (btnText.includes('Continue') || btnText.includes('Click On Ads')) {
-                            // Relaxed check: "Click On Ads To Get Download Button" OR "Click On Ads To Get Download Link"
-                            console.log("[SharClub] Clicking Continue (Phase 1)...");
-                            await safeEvaluate(() => document.getElementById('topButton').click());
-
-                            // Now we need to scroll down and find bottomButton
-                            await new Promise(r => setTimeout(r, 2000));
-                        } else if (btnText.includes('Scroll Down Link is Ready')) {
-                            // This is just a label, ignore and check bottom
-                            console.log("[SharClub] Top says ready, checking bottom...");
-                        }
-                    } catch (e) { console.log("Top Button Error:", e.message); }
-                }
-
-                // Step B: Click Bottom Button (Generate Link)
-                const bottomBtn = await page.$('#bottomButton');
-                if (bottomBtn) {
-                    try {
-                        // Scroll to bottom
-                        await safeEvaluate(() => window.scrollTo(0, document.body.scrollHeight));
-
-                        const btnText = await safeEvaluate(() => document.getElementById('bottomButton').innerText);
-                        console.log(`[SharClub] Bottom Button Text: ${btnText}`);
-
-                        if (btnText.includes('Generating Link')) {
-                            console.log("[SharClub] Clicking Generating Link...");
-                            await safeEvaluate(() => document.getElementById('bottomButton').click());
-                            // Wait 8s
-                            await new Promise(r => setTimeout(r, 9000));
-                        } else if (btnText.includes('Next') || btnText.includes('Get Link') || btnText.includes('Click To Continue')) {
-                            console.log("[SharClub] Clicking Next/Get Link/Continue...");
-                            await safeEvaluate(() => {
-                                const btn = document.getElementById('bottomButton');
-                                if (btn) {
-                                    btn.click();
-                                    // Sometimes it opens a new tab, we want to stay
-                                }
-                            });
-                            await waitForNavigation(page);
-                            continue;
-                        }
-                    } catch (e) { console.log("Bottom Button Error:", e.message); }
-                }
-            }
-            // --- End Lksfy Logic ---
-
-            // --- 24jobalert.com Logic ---
+            // --- Combined SharClub / Lksfy / 24jobalert Logic ---
             if (currentUrl.includes('24jobalert.com') || currentUrl.includes('sharclub.in') || currentUrl.includes('lksfy.com')) {
                 console.log(`[Bypass] Processing: ${currentUrl}`);
 
                 // 1. Force unhide the download link (standard rewarded ad bypass)
-                await page.evaluate(() => {
+                await safeEvaluate(() => {
                     const box = document.getElementById('download-link');
                     if (box) box.style.display = 'block';
+                    
+                    // Remove Ads/Overlays (from old Sharclub logic)
+                    if (location.href.includes('sharclub.in')) {
+                        const overlays = Array.from(document.querySelectorAll('div, section')).filter(el => {
+                             const style = window.getComputedStyle(el);
+                             return style.position === 'fixed' || style.position === 'absolute' || style.zIndex > 100;
+                        });
+                        overlays.forEach(el => el.remove());
+                    }
                 });
 
                 // 2. Poll for interactions
                 let foundRealLink = null;
                 const pollStartTime = Date.now();
-                while (Date.now() - pollStartTime < 45000) { // 45s timeout
+                while (Date.now() - pollStartTime < 120000) { // Increased to 120s for 4 steps
 
-                    // A. Smart Button Clicking (Sharclub/Lksfy/24jobalert)
+                    // A. Smart Button Clicking
                     const clicked = await page.evaluate(() => {
                         const isVisible = (el) => el && el.offsetParent !== null;
 
@@ -180,35 +115,40 @@ async function bypassUrl(url) {
                         const topBtn = document.getElementById('topButton');
                         if (isVisible(topBtn)) {
                             const text = (topBtn.innerText || '').trim();
-                            // Click if it's an action button, NOT just a label
-                            // Valid: "Human Verification", "Human Verifcation", "Continue"
-                            // Invalid: "Scroll Down Link is Ready", "Please Wait"
-                            if (text.includes('Human Verif') || (text.includes('Continue') && !text.includes('Click To'))) {
+                            // Valid: "Human Verification", "Continue"
+                            // Invalid: labels, "Click On Ads"
+                            const invalidTexts = ['Scroll Down', 'Link is Ready', 'Please Wait', 'Click On Ads'];
+                            const isInvalid = invalidTexts.some(t => text.includes(t));
+                            
+                            if (!isInvalid && (text.includes('Human') || text.includes('Continue'))) {
                                 topBtn.click();
                                 return `Top Button: ${text}`;
                             }
                         }
-
+                        
                         // 2. Check Bottom Button (Priority 2: Progression)
                         const bottomBtn = document.getElementById('bottomButton');
                         if (isVisible(bottomBtn)) {
                             const text = (bottomBtn.innerText || '').trim();
-                            // Valid: "Get Link", "Next", "Click To Continue", "Generating Link", "Download"
-                            if (text.includes('Get Link') || text.includes('Next') || text.includes('Click To Continue') || text.includes('Generating') || text.includes('Download')) {
+                            // Wait if generating
+                            if (text.includes('Generating') || text.includes('Please Wait')) {
+                                return `WAIT: Bottom Button says ${text}`; 
+                            }
+                            // Valid Actions
+                            if (text.includes('Get Link') || text.includes('Next') || text.includes('Click To Continue') || text.includes('Download')) {
                                 bottomBtn.click();
                                 return `Bottom Button: ${text}`;
                             }
                         }
 
-                        // 3. Fallback: Check Top Button again for other valid texts if nothing else matched
-                        // (e.g. maybe just "Continue" appeared later)
+                        // 3. Fallback: Check Top Button again
                         if (isVisible(topBtn)) {
-                            const text = (topBtn.innerText || '').trim();
-                            if (!text.includes('Scroll Down') && !text.includes('Link is Ready') && !text.includes('Please Wait')) {
-                                // Only click if we didn't click it in step 1 (implied by return)
-                                topBtn.click();
-                                return `Top Button (Fallback): ${text}`;
-                            }
+                             const text = (topBtn.innerText || '').trim();
+                             const invalidTexts = ['Scroll Down', 'Link is Ready', 'Please Wait', 'Click On Ads'];
+                             if (!invalidTexts.some(t => text.includes(t))) {
+                                 topBtn.click();
+                                 return `Top Button (Fallback): ${text}`;
+                             }
                         }
 
                         // 4. Check specific IDs
@@ -222,9 +162,17 @@ async function bypassUrl(url) {
                     });
 
                     if (clicked) {
-                        console.log(`[Bypass] Smart Clicked: ${clicked}`);
-                        // Wait for navigation or potential new tab
-                        await new Promise(r => setTimeout(r, 8000));
+                        console.log(`[Bypass] Smart Action: ${clicked}`);
+                        if (clicked.startsWith('WAIT')) {
+                            // Do nothing, just wait
+                            await new Promise(r => setTimeout(r, 2000));
+                        } else {
+                            // We clicked something
+                            // Wait for navigation or countdown
+                            // User said: Continue (after 15s), 8s timer, etc.
+                            // 10s is a safe middle ground
+                            await new Promise(r => setTimeout(r, 10000));
+                        }
                     }
 
                     // A2. Check for New Tabs (Popups) - CRITICAL for final link
