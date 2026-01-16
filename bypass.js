@@ -108,7 +108,7 @@ async function bypassUrl(url) {
                 while (Date.now() - pollStartTime < 300000) { // Increased to 300s for 4 steps
 
                     // A. Smart Button Clicking
-                    const clicked = await page.evaluate(() => {
+                    const clicked = await safeEvaluate(() => {
                         const isVisible = (el) => el && el.offsetParent !== null;
 
                         // 1. Check Top Button (Priority 1: Verification/Continue)
@@ -161,14 +161,18 @@ async function bypassUrl(url) {
                         // 5. Generic Fallback: Search for ANY "Get Link" button if specific IDs fail
                          // 5. Generic Fallback (Case Insensitive)
                         // Useful for final Lksfy page where ID might differ
-                        const allButtons = Array.from(document.querySelectorAll('button, a, div[role="button"], input[type="button"], input[type="submit"]'));
-                        const visibleButtons = allButtons.filter(el => isVisible(el));
+                        const allButtons = Array.from(document.querySelectorAll('button, a, div, span, input'));
+                        const visibleButtons = allButtons.filter(el => {
+                            // Relaxed visibility: checks cleaning logic
+                            return el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0);
+                        });
                         
                         const genericGetLink = visibleButtons.find(el => {
                             const t = (el.innerText || el.value || '').trim().toLowerCase();
-                            return t.includes('get link') || t.includes('get download link') || t.includes('download link');
+                            // Strict on text to avoid clicking random paragraphs
+                            return t === 'get link' || t === 'get download link' || t === 'download link' || t === 'get link ->';
                         });
-                        
+
                         if (genericGetLink) {
                             genericGetLink.click();
                             return `Generic Button: ${(genericGetLink.innerText || genericGetLink.value || '').trim()}`;
@@ -210,14 +214,14 @@ async function bypassUrl(url) {
                     }
 
                     // B. Check for the link
-                    const extractedLink = await page.evaluate(() => {
+                    const extractedLink = await safeEvaluate(() => {
                         const a = document.querySelector('#download-link a');
                         return a ? a.href : null;
                     });
 
                     if (extractedLink) {
                         if (extractedLink.includes('your-download-link')) {
-                            console.log('[Bypass] Found placeholder link. Waiting/Retrying...');
+                            // console.log('[Bypass] Found placeholder link. Waiting/Retrying...');
                             await new Promise(r => setTimeout(r, 2000));
                             continue;
                         }
@@ -237,9 +241,11 @@ async function bypassUrl(url) {
                     await new Promise(r => setTimeout(r, 2000));
                 }
 
+                console.log(`[Bypass] Inner loop exited. FoundRealLink: ${foundRealLink}`);
+
                 if (!foundRealLink) {
                     // One last check for placeholder error
-                    const placeholder = await page.evaluate(() => {
+                    const placeholder = await safeEvaluate(() => {
                         const a = document.querySelector('#download-link a');
                         return a ? a.href : null;
                     });
