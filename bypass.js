@@ -178,6 +178,12 @@ async function bypassUrl(url) {
                             return `Generic Button: ${(genericGetLink.innerText || genericGetLink.value || '').trim()}`;
                         }
 
+                        // DEBUG: If we are on lksfy.com and found nothing, log what we DO see
+                        if (location.href.includes('lksfy.com')) {
+                             const visibleTexts = visibleButtons.map(el => (el.innerText || el.value || '').trim()).filter(t => t.length > 0);
+                             return `DEBUG_NO_ACTION: Found ${visibleButtons.length} visible buttons. Texts: ${visibleTexts.slice(0, 10).join(', ')}`;
+                        }
+
                         return null;
                     });
 
