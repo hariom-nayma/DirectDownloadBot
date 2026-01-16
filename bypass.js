@@ -172,28 +172,46 @@ async function bypassUrl(url) {
                 const pollStartTime = Date.now();
                 while (Date.now() - pollStartTime < 45000) { // 45s timeout
 
-                    // A. Check for "Step X/4" Button (Sharclub/Lksfy flow)
-                    const stepBtn = await page.$('#topButton, #btn6, #startCountdownBtn');
-                    if (stepBtn) {
-                        const btnText = await safeEvaluate(() => {
-                            const el = document.querySelector('#topButton, #btn6, #startCountdownBtn');
-                            return el ? el.innerText : 'Unknown';
-                        });
-                        console.log(`[Bypass] Found Step Button: "${btnText}" Clicking...`);
+                    // A. Smart Button Clicking (Sharclub/Lksfy/24jobalert)
+                    const clicked = await page.evaluate(() => {
+                        const isVisible = (el) => el && el.offsetParent !== null;
+                        
+                        // 1. Check Bottom Button (Primary for Sharclub)
+                        const bottomBtn = document.getElementById('bottomButton');
+                        if (isVisible(bottomBtn)) {
+                            const text = bottomBtn.innerText || '';
+                            // Click if it looks like a navigation button
+                            if (text.includes('Get Link') || text.includes('Next') || text.includes('Continue') || text.includes('Generating') || text.includes('Download')) {
+                                bottomBtn.click();
+                                return `Bottom Button: ${text}`;
+                            }
+                        }
 
-                        try {
-                            await page.evaluate(() => {
-                                // Click known buttons
-                                const b1 = document.getElementById('topButton');
-                                if (b1) b1.click();
-                                const b2 = document.getElementById('btn6');
-                                if (b2) b2.click();
-                                const b3 = document.getElementById('startCountdownBtn');
-                                if (b3) b3.click();
-                            });
-                            // Wait for navigation or potential new tab
-                            await new Promise(r => setTimeout(r, 8000));
-                        } catch (e) { console.log("Step click failed:", e.message); }
+                        // 2. Check Top Button
+                        const topBtn = document.getElementById('topButton');
+                        if (isVisible(topBtn)) {
+                            const text = topBtn.innerText || '';
+                            // CRITICAL: Ignore "Scroll Down Link is Ready" label
+                            if (!text.includes('Scroll Down') && !text.includes('Link is Ready')) {
+                                topBtn.click();
+                                return `Top Button: ${text}`;
+                            }
+                        }
+
+                        // 3. Check specific IDs
+                        const btn6 = document.getElementById('btn6');
+                        if (isVisible(btn6)) { btn6.click(); return 'btn6'; }
+
+                        const startBtn = document.getElementById('startCountdownBtn');
+                        if (isVisible(startBtn)) { startBtn.click(); return 'startCountdownBtn'; }
+
+                        return null;
+                    });
+
+                    if (clicked) {
+                        console.log(`[Bypass] Smart Clicked: ${clicked}`);
+                        // Wait for navigation or potential new tab
+                        await new Promise(r => setTimeout(r, 8000));
                     }
 
                     // A2. Check for New Tabs (Popups) - CRITICAL for final link
