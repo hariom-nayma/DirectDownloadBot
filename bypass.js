@@ -91,12 +91,12 @@ async function bypassUrl(url) {
                 await safeEvaluate(() => {
                     const box = document.getElementById('download-link');
                     if (box) box.style.display = 'block';
-                    
+
                     // Remove Ads/Overlays (from old Sharclub logic)
                     if (location.href.includes('sharclub.in')) {
                         const overlays = Array.from(document.querySelectorAll('div, section')).filter(el => {
-                             const style = window.getComputedStyle(el);
-                             return style.position === 'fixed' || style.position === 'absolute' || style.zIndex > 100;
+                            const style = window.getComputedStyle(el);
+                            return style.position === 'fixed' || style.position === 'absolute' || style.zIndex > 100;
                         });
                         overlays.forEach(el => el.remove());
                     }
@@ -119,20 +119,20 @@ async function bypassUrl(url) {
                             // Invalid: labels, "Click On Ads"
                             const invalidTexts = ['Scroll Down', 'Link is Ready', 'Please Wait', 'Click On Ads'];
                             const isInvalid = invalidTexts.some(t => text.includes(t));
-                            
+
                             if (!isInvalid && (text.includes('Human') || text.includes('Continue'))) {
                                 topBtn.click();
                                 return `Top Button: ${text}`;
                             }
                         }
-                        
+
                         // 2. Check Bottom Button (Priority 2: Progression)
                         const bottomBtn = document.getElementById('bottomButton');
                         if (isVisible(bottomBtn)) {
                             const text = (bottomBtn.innerText || '').trim();
                             // Wait if generating
                             if (text.includes('Generating') || text.includes('Please Wait')) {
-                                return `WAIT: Bottom Button says ${text}`; 
+                                return `WAIT: Bottom Button says ${text}`;
                             }
                             // Valid Actions
                             if (text.includes('Get Link') || text.includes('Next') || text.includes('Click To Continue') || text.includes('Download')) {
@@ -143,12 +143,12 @@ async function bypassUrl(url) {
 
                         // 3. Fallback: Check Top Button again
                         if (isVisible(topBtn)) {
-                             const text = (topBtn.innerText || '').trim();
-                             const invalidTexts = ['Scroll Down', 'Link is Ready', 'Please Wait', 'Click On Ads'];
-                             if (!invalidTexts.some(t => text.includes(t))) {
-                                 topBtn.click();
-                                 return `Top Button (Fallback): ${text}`;
-                             }
+                            const text = (topBtn.innerText || '').trim();
+                            const invalidTexts = ['Scroll Down', 'Link is Ready', 'Please Wait', 'Click On Ads'];
+                            if (!invalidTexts.some(t => text.includes(t))) {
+                                topBtn.click();
+                                return `Top Button (Fallback): ${text}`;
+                            }
                         }
 
                         // 4. Check specific IDs
@@ -157,6 +157,19 @@ async function bypassUrl(url) {
 
                         const startBtn = document.getElementById('startCountdownBtn');
                         if (isVisible(startBtn)) { startBtn.click(); return 'startCountdownBtn'; }
+
+                        // 5. Generic Fallback: Search for ANY "Get Link" button if specific IDs fail
+                        // (Useful for final Lksfy page if ID is different)
+                        const allButtons = Array.from(document.querySelectorAll('button, a, div[role="button"], input[type="button"], input[type="submit"]'));
+                        const genericGetLink = allButtons.find(el => {
+                            if (!isVisible(el)) return false;
+                            const t = (el.innerText || el.value || '').trim();
+                            return t.includes('Get Link') || t.includes('Get Download Link');
+                        });
+                        if (genericGetLink) {
+                            genericGetLink.click();
+                            return `Generic Button: ${(genericGetLink.innerText || '').trim()}`;
+                        }
 
                         return null;
                     });
