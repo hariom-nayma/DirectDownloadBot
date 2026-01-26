@@ -506,6 +506,43 @@ bot.onText(/\/resume_mega/, async (msg) => {
     }
 });
 
+
+// --- File Link Logic ---
+bot.onText(/\/fileLink/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    if (!msg.reply_to_message) {
+        return bot.sendMessage(chatId, "⚠️ Please reply to a file with /fileLink to get its direct link.");
+    }
+
+    const reply = msg.reply_to_message;
+    let fileId;
+
+    if (reply.document) fileId = reply.document.file_id;
+    else if (reply.video) fileId = reply.video.file_id;
+    else if (reply.audio) fileId = reply.audio.file_id;
+    else if (reply.voice) fileId = reply.voice.file_id;
+    else if (reply.sticker) fileId = reply.sticker.file_id;
+    else if (reply.photo && reply.photo.length > 0) {
+        // Get the largest photo
+        fileId = reply.photo[reply.photo.length - 1].file_id;
+    }
+
+    if (!fileId) {
+        return bot.sendMessage(chatId, "⚠️ The replied message does not contain a supported file.");
+    }
+
+    try {
+        const fileLink = await bot.getFileLink(fileId);
+        bot.sendMessage(chatId, `🔗 *Direct Link Generated:*\n\n${fileLink}`, { 
+            parse_mode: 'Markdown',
+            disable_web_page_preview: true 
+        });
+    } catch (error) {
+        bot.sendMessage(chatId, `❌ Error generating link: ${error.message}`);
+    }
+});
+
 // --- Bypass Logic ---
 bot.onText(/\/bypass (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
