@@ -26,8 +26,21 @@ const fluentFfmpeg = require('fluent-ffmpeg');
 const progress = require('progress-stream');
 const https = require('https');
 const { File, Storage } = require('megajs');
-const { getUser, updateUser, checkPlan, getSettings, updateSettings } = require('./helpers');
+const { File, Storage } = require('megajs');
+const { getUser, updateUser, checkPlan, getSettings, updateSettings, getGoogleToken, saveGoogleToken } = require('./helpers');
 const { bypassUrl } = require('./bypass');
+const { google } = require('googleapis');
+
+// Google OAuth Setup
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob';
+
+const oauth2Client = new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    REDIRECT_URI
+);
 
 // Admin ID from env
 const ADMIN_ID = process.env.ADMIN_ID;
@@ -483,6 +496,102 @@ bot.onText(/\/login_mega (.+) (.+)/, async (msg, match) => {
     }
 });
 
+// --- Google Drive Logic ---
+
+bot.onText(/\/gdrive$/, (msg) => {
+    const chatId = msg.chat.id;
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+        return bot.sendMessage(chatId, "❌ Google Drive Integration is not configured on this bot. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env");
+    }
+
+    const authUrl = oauth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: ['https://www.googleapis.com/auth/drive.file']
+    });
+
+    bot.sendMessage(chatId, `🔗 *Link Google Drive*\n\n1. [Click Here](${authUrl}) to authorize.\n2. Copy the code.\n3. Send the code using:\n\`/gauth <your-code>\``, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/\/gauth (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const code = match[1].trim();
+
+    try {
+        const { tokens } = await oauth2Client.getToken(code);
+        saveGoogleToken(chatId, tokens);
+        bot.sendMessage(chatId, "✅ *Google Drive Connected!*", { parse_mode: 'Markdown' });
+    } catch (error) {
+        bot.sendMessage(chatId, `❌ Auth Error: ${error.message}`);
+    }
+});
+
+bot.onText(/\/gdrive_add/, async (msg) => {
+    const chatId = msg.chat.id;
+    if (!msg.reply_to_message) {
+        return bot.sendMessage(chatId, "⚠️ Reply to a file with /gdrive_add to upload it.");
+    }
+
+    const tokens = getGoogleToken(chatId);
+    if (!tokens) {
+        return bot.sendMessage(chatId, "⚠️ You are not connected to Google Drive. Use /gdrive to connect.");
+    }
+
+    oauth2Client.setCredentials(tokens);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+    // Identify file
+    const reply = msg.reply_to_message;
+    let fileId;
+    let fileName = 'telegram_upload';
+
+    if (reply.document) { fileId = reply.document.file_id; fileName = reply.document.file_name; }
+    else if (reply.video) { fileId = reply.video.file_id; fileName = reply.video.file_name || 'video.mp4'; }
+    else if (reply.audio) { fileId = reply.audio.file_id; fileName = reply.audio.file_name || 'audio.mp3'; }
+    else if (reply.photo && reply.photo.length > 0) { 
+        fileId = reply.photo[reply.photo.length - 1].file_id; 
+        fileName = 'photo.jpg'; 
+    }
+
+    if (!fileId) return bot.sendMessage(chatId, "❌ No file found.");
+
+    const statusMsg = await bot.sendMessage(chatId, "⏳ Downloading locally...");
+
+    try {
+        // Download Locally
+        const filePath = await bot.downloadFile(fileId, downloadsDir);
+        
+        // Upload to Drive
+        bot.editMessageText("☁️ Uploading to Google Drive...", { chat_id: chatId, message_id: statusMsg.message_id });
+
+        const res = await drive.files.create({
+            requestBody: {
+                name: fileName,
+                fields: 'id, webContentLink, webViewLink'
+            },
+            media: {
+                mimeType: 'application/octet-stream',
+                body: fs.createReadStream(filePath)
+            }
+        });
+
+        // Cleanup
+        fs.unlinkSync(filePath);
+
+        // Send Link
+        const { webContentLink, webViewLink } = res.data;
+        bot.editMessageText(`✅ *Uploaded to Drive!*\n\n📥 [Direct Link](${webContentLink})\n👁️ [View Link](${webViewLink})`, {
+            chat_id: chatId, 
+            message_id: statusMsg.message_id,
+            parse_mode: 'Markdown',
+            disable_web_page_preview: true
+        });
+
+    } catch (error) {
+        bot.editMessageText(`❌ Upload Failed: ${error.message}`, { chat_id: chatId, message_id: statusMsg.message_id });
+        console.error(error);
+    }
+});
+
 bot.onText(/\/logout_mega/, (msg) => {
     updateUser(msg.chat.id, { mega_auth: null });
     bot.sendMessage(msg.chat.id, "✅ Mega credentials removed.");
@@ -551,9 +660,9 @@ bot.onText(/\/fileLink/, async (msg) => {
         if (error.message.includes('too big')) {
             msgText += `\n\n⚠️ *Reason:* The file is too large for the current API server.`;
             if (!isLocal) {
-                msgText += `\n💡 *Solution:* You are using Telegram Cloud API (20MB limit). You MUST set 'TELEGRAM_API_URL' in .env to your Local API Server to handle files up to 2GB/4GB.`;
+                msgText += `\n💡 *Solution:* You are using Telegram Cloud API (20MB limit). You MUST set 'TELEGRAM_API_URL' in .env to your Local API Server to handle large files.`;
             } else {
-                msgText += `\n💡 *Note:* Even with Local Server, there may be limits (usually 2GB/2000MB). For >2GB, ensure your Local Server supports it.`;
+                msgText += `\n💡 *Solution:* Your Local Server is rejecting the file. \n1. Ensure you started the server with the \`--local\` flag (e.g., \`./telegram-bot-api --local ...\`).\n2. Standard Bot API Server limit is ~2GB. For 4GB, you may need a custom build or MTProto.`;
             }
         }
         

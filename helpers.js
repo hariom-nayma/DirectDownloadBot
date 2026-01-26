@@ -109,10 +109,21 @@ function checkPlan(userId) {
     return user;
 }
 
+function getGoogleToken(userId) {
+    const user = getUser(userId);
+    return user.google_token || null;
+}
+
+function saveGoogleToken(userId, tokens) {
+    return updateUser(userId, { google_token: tokens });
+}
+
 module.exports = {
     getUser,
     updateUser,
     checkPlan,
     getSettings,
-    updateSettings
+    updateSettings,
+    getGoogleToken,
+    saveGoogleToken
 };
