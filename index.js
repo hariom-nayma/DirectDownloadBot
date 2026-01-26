@@ -554,31 +554,74 @@ bot.onText(/\/gdrive_add/, async (msg) => {
 
     if (!fileId) return bot.sendMessage(chatId, "❌ No file found.");
 
-    const statusMsg = await bot.sendMessage(chatId, "⏳ Downloading locally...");
+    let lastUpdateListener = 0;
+    const statusMsg = await bot.sendMessage(chatId, "⏳ *Downloading from Telegram...*", { parse_mode: 'Markdown' });
 
     try {
-        // Download Locally
+        // 1. Download Locally
         const filePath = await bot.downloadFile(fileId, downloadsDir);
-        
-        // Upload to Drive
-        bot.editMessageText("☁️ Uploading to Google Drive...", { chat_id: chatId, message_id: statusMsg.message_id });
+        const fileSize = fs.statSync(filePath).size;
+
+        if (fileSize === 0) throw new Error("File downloaded but is empty (0 bytes).");
+
+        // 2. Upload to Drive
+        bot.editMessageText("☁️ *Starting Upload to Drive...*", { 
+            chat_id: chatId, 
+            message_id: statusMsg.message_id, 
+            parse_mode: 'Markdown' 
+        });
 
         const res = await drive.files.create({
             requestBody: {
                 name: fileName,
-                fields: 'id, webContentLink, webViewLink'
+                // Request specific fields to ensure links are returned
+                fields: 'id, name, webContentLink, webViewLink, size'
             },
             media: {
                 mimeType: 'application/octet-stream',
                 body: fs.createReadStream(filePath)
             }
+        }, {
+            // Axios config for upload progress
+            onUploadProgress: (evt) => {
+                const now = Date.now();
+                if (now - lastUpdateListener > 2000) { // Update every 2s
+                    const progress = (evt.loaded / evt.total) * 100;
+                    const loadedMB = (evt.loaded / (1024 * 1024)).toFixed(2);
+                    const totalMB = (evt.total / (1024 * 1024)).toFixed(2);
+                    
+                    bot.editMessageText(`☁️ *Uploading...*\n\n${generateProgressBar(progress)} ${Math.round(progress)}%\n${loadedMB} MB / ${totalMB} MB`, {
+                        chat_id: chatId,
+                        message_id: statusMsg.message_id,
+                        parse_mode: 'Markdown'
+                    }).catch(() => {});
+                    lastUpdateListener = now;
+                }
+            }
+        });
+
+        // 3. Set Permissions (Make it public so links work)
+        await drive.permissions.create({
+            fileId: res.data.id,
+            requestBody: {
+                role: 'reader',
+                type: 'anyone'
+            }
+        });
+
+        // 4. Refetch file to get updated links (sometimes links appear after permission change)
+        const finalFile = await drive.files.get({
+            fileId: res.data.id,
+            fields: 'webContentLink, webViewLink'
         });
 
         // Cleanup
         fs.unlinkSync(filePath);
 
         // Send Link
-        const { webContentLink, webViewLink } = res.data;
+        const webContentLink = finalFile.data.webContentLink || res.data.webContentLink || "N/A";
+        const webViewLink = finalFile.data.webViewLink || res.data.webViewLink || "N/A";
+
         bot.editMessageText(`✅ *Uploaded to Drive!*\n\n📥 [Direct Link](${webContentLink})\n👁️ [View Link](${webViewLink})`, {
             chat_id: chatId, 
             message_id: statusMsg.message_id,
@@ -587,8 +630,12 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         });
 
     } catch (error) {
-        bot.editMessageText(`❌ Upload Failed: ${error.message}`, { chat_id: chatId, message_id: statusMsg.message_id });
-        console.error(error);
+        bot.editMessageText(`❌ *Upload Failed:*\n${error.message}`, { 
+            chat_id: chatId, 
+            message_id: statusMsg.message_id,
+            parse_mode: 'Markdown' 
+        });
+        console.error("GDrive Error:", error);
     }
 });
 
