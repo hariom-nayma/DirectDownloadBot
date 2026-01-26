@@ -26,7 +26,7 @@ const fluentFfmpeg = require('fluent-ffmpeg');
 const progress = require('progress-stream');
 const https = require('https');
 const { File, Storage } = require('megajs');
-const { File, Storage } = require('megajs');
+
 const { getUser, updateUser, checkPlan, getSettings, updateSettings, getGoogleToken, saveGoogleToken } = require('./helpers');
 const { bypassUrl } = require('./bypass');
 const { google } = require('googleapis');
