@@ -620,21 +620,67 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                     parse_mode: 'Markdown'
                 });
 
-                // Verify source exists
-                if (!fs.existsSync(fileLink)) {
-                    throw new Error(`Local file not found at: ${fileLink}\nEnsure Docker volume mapping is correct: -v /var/lib/telegram-bot-api:/var/lib/telegram-bot-api`);
+                // Try Direct Copy
+                let copySuccess = false;
+                if (fs.existsSync(fileLink)) {
+                    try {
+                        await new Promise((resolve, reject) => {
+                            const r = fs.createReadStream(fileLink);
+                            const w = fs.createWriteStream(filePath);
+                            r.pipe(w);
+                            w.on('finish', () => { copySuccess = true; resolve(); });
+                            w.on('error', reject);
+                            r.on('error', reject);
+                        });
+                    } catch (e) {
+                        console.error("Direct copy failed, falling back to HTTP:", e.message);
+                    }
                 }
 
-                // For large files, copyFileSync might block event loop, but it's instant on same disk.
-                // Using createReadStream/writeStream to be safe and async-ish
-                await new Promise((resolve, reject) => {
-                    const r = fs.createReadStream(fileLink);
-                    const w = fs.createWriteStream(filePath);
-                    r.pipe(w);
-                    w.on('finish', resolve);
-                    w.on('error', reject);
-                    r.on('error', reject);
-                });
+                // Fallback: If copy failed or file not found (permissions/mapping issue) -> Download via Local HTTP
+                if (!copySuccess) {
+                    bot.editMessageText("⬇️ *Direct Copy Failed. Trying Local HTTP...*", {
+                        chat_id: chatId,
+                        message_id: statusMsg.message_id,
+                        parse_mode: 'Markdown'
+                    });
+
+                    // Construct Local URL: http://localhost:8081/file/bot<token>/<absolute_path>
+                    // Note: Local Server serves absolute paths if you ask correctly
+                    const localUrl = `${baseApiUrl}/file/bot${token}${fileLink}`; // fileLink starts with /
+                    
+                    const writer = fs.createWriteStream(filePath);
+                    const response = await axios({
+                        url: localUrl,
+                        method: 'GET',
+                        responseType: 'stream'
+                    });
+
+                    // Reuse download progress logic
+                    const totalLength = response.headers['content-length'];
+                    let downloadedLength = 0;
+                    response.data.on('data', (chunk) => {
+                        downloadedLength += chunk.length;
+                        const now = Date.now();
+                        if (now - lastUpdateListener > 2000) {
+                            const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
+                            const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
+                            bot.editMessageText(`⬇️ *Downloading (HTTP Local)...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
+                                chat_id: chatId,
+                                message_id: statusMsg.message_id,
+                                parse_mode: 'Markdown'
+                            }).catch(() => {});
+                            lastUpdateListener = now;
+                        }
+                    });
+
+                    response.data.pipe(writer);
+
+                    await new Promise((resolve, reject) => {
+                        writer.on('finish', resolve);
+                        writer.on('error', reject);
+                    });
+                }
             }
 
             const fileSize = fs.statSync(filePath).size;
