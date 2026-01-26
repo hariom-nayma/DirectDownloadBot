@@ -517,20 +517,27 @@ bot.onText(/\/fileLink/, async (msg) => {
 
     const reply = msg.reply_to_message;
     let fileId;
+    let fileSize = 0;
 
-    if (reply.document) fileId = reply.document.file_id;
-    else if (reply.video) fileId = reply.video.file_id;
-    else if (reply.audio) fileId = reply.audio.file_id;
-    else if (reply.voice) fileId = reply.voice.file_id;
-    else if (reply.sticker) fileId = reply.sticker.file_id;
+    if (reply.document) { fileId = reply.document.file_id; fileSize = reply.document.file_size; }
+    else if (reply.video) { fileId = reply.video.file_id; fileSize = reply.video.file_size; }
+    else if (reply.audio) { fileId = reply.audio.file_id; fileSize = reply.audio.file_size; }
+    else if (reply.voice) { fileId = reply.voice.file_id; fileSize = reply.voice.file_size; }
+    else if (reply.sticker) { fileId = reply.sticker.file_id; fileSize = reply.sticker.file_size; }
     else if (reply.photo && reply.photo.length > 0) {
         // Get the largest photo
-        fileId = reply.photo[reply.photo.length - 1].file_id;
+        const photo = reply.photo[reply.photo.length - 1];
+        fileId = photo.file_id;
+        fileSize = photo.file_size;
     }
 
     if (!fileId) {
         return bot.sendMessage(chatId, "⚠️ The replied message does not contain a supported file.");
     }
+
+    // Debug Message
+    const isLocal = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1');
+    bot.sendMessage(chatId, `🔍 Processing File...\nSize: ${formatBytes(fileSize)}\nAPI: ${isLocal ? 'Local Server' : 'Telegram Cloud'}`);
 
     try {
         const fileLink = await bot.getFileLink(fileId);
@@ -539,7 +546,18 @@ bot.onText(/\/fileLink/, async (msg) => {
             disable_web_page_preview: true 
         });
     } catch (error) {
-        bot.sendMessage(chatId, `❌ Error generating link: ${error.message}`);
+        let msgText = `❌ Error generating link: ${error.message}`;
+        
+        if (error.message.includes('too big')) {
+            msgText += `\n\n⚠️ *Reason:* The file is too large for the current API server.`;
+            if (!isLocal) {
+                msgText += `\n💡 *Solution:* You are using Telegram Cloud API (20MB limit). You MUST set 'TELEGRAM_API_URL' in .env to your Local API Server to handle files up to 2GB/4GB.`;
+            } else {
+                msgText += `\n💡 *Note:* Even with Local Server, there may be limits (usually 2GB/2000MB). For >2GB, ensure your Local Server supports it.`;
+            }
+        }
+        
+        bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown' });
     }
 });
 
