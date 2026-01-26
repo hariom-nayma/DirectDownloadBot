@@ -558,43 +558,61 @@ bot.onText(/\/gdrive_add/, async (msg) => {
     const statusMsg = await bot.sendMessage(chatId, "⏳ *Downloading from Telegram...*", { parse_mode: 'Markdown' });
 
     try {
-        // 1. Get File Link
+        // 1. Get File Link (or Path)
         const fileLink = await bot.getFileLink(fileId);
         const filePath = path.join(downloadsDir, `${Date.now()}_${fileName}`);
-        const writer = fs.createWriteStream(filePath);
 
-        // 2. Download Stream with Progress
-        const response = await axios({
-            url: fileLink,
-            method: 'GET',
-            responseType: 'stream'
-        });
+        // Check if it's a URL or a Local Path
+        if (fileLink.startsWith('http')) {
+            // --- URL Download (Cloud API or Local HTTP) ---
+            const writer = fs.createWriteStream(filePath);
+            const response = await axios({
+                url: fileLink,
+                method: 'GET',
+                responseType: 'stream'
+            });
 
-        const totalLength = response.headers['content-length'];
-        let downloadedLength = 0;
+            const totalLength = response.headers['content-length'];
+            let downloadedLength = 0;
 
-        response.data.on('data', (chunk) => {
-            downloadedLength += chunk.length;
-            const now = Date.now();
-            if (now - lastUpdateListener > 2000) {
-                const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
-                const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
-                bot.editMessageText(`⬇️ *Downloading from Telegram...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
-                    chat_id: chatId,
-                    message_id: statusMsg.message_id,
-                    parse_mode: 'Markdown'
-                }).catch(() => {});
-                lastUpdateListener = now;
+            response.data.on('data', (chunk) => {
+                downloadedLength += chunk.length;
+                const now = Date.now();
+                if (now - lastUpdateListener > 2000) {
+                    const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
+                    const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
+                    bot.editMessageText(`⬇️ *Downloading using HTTP...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
+                        chat_id: chatId,
+                        message_id: statusMsg.message_id,
+                        parse_mode: 'Markdown'
+                    }).catch(() => {});
+                    lastUpdateListener = now;
+                }
+            });
+
+            response.data.pipe(writer);
+
+            await new Promise((resolve, reject) => {
+                writer.on('finish', resolve);
+                writer.on('error', reject);
+            });
+
+        } else {
+            // --- Local Path Copy (Local API Volume Mapped) ---
+            // If the bot sends a path like /var/lib/..., we can just copy it if we have access
+            bot.editMessageText("⬇️ *Copying from Local Server...*", { 
+                chat_id: chatId, 
+                message_id: statusMsg.message_id, 
+                parse_mode: 'Markdown' 
+            });
+            
+            // Verify source exists
+            if (!fs.existsSync(fileLink)) {
+                throw new Error(`Local file not found at: ${fileLink}\nEnsure Docker volume mapping is correct: -v /var/lib/telegram-bot-api:/var/lib/telegram-bot-api`);
             }
-        });
-
-        response.data.pipe(writer);
-
-        // Wait for download to finish completely
-        await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-        });
+            
+            fs.copyFileSync(fileLink, filePath);
+        }
 
         const fileSize = fs.statSync(filePath).size;
         if (fileSize === 0) throw new Error("File downloaded but is empty (0 bytes).");
