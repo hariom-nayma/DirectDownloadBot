@@ -658,7 +658,12 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                          }
                     }
 
-                    const localUrl = `${baseApiUrl}/file/bot${token}${relativePath}`;
+                    // Remove leading slash to prevent double slash in URL
+                    if (relativePath.startsWith('/')) relativePath = relativePath.substring(1);
+                    if (relativePath.startsWith('\\')) relativePath = relativePath.substring(1);
+
+                    const localUrl = `${baseApiUrl}/file/bot${token}/${relativePath}`;
+                    console.log(`[Debug] Local HTTP Fallback: ${localUrl}`);
                     
                     const writer = fs.createWriteStream(filePath);
                     const response = await axios({
