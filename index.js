@@ -645,9 +645,20 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                         parse_mode: 'Markdown'
                     });
 
-                    // Construct Local URL: http://localhost:8081/file/bot<token>/<absolute_path>
-                    // Note: Local Server serves absolute paths if you ask correctly
-                    const localUrl = `${baseApiUrl}/file/bot${token}${fileLink}`; // fileLink starts with /
+                    // Construct Local URL correctly from Absolute Path
+                    // Absolute: /var/lib/telegram-bot-api/<token>/videos/file.mp4
+                    // Target URL: http://localhost:8081/file/bot<token>/videos/file.mp4
+                    
+                    let relativePath = fileLink;
+                    // Try to extract relative path including the leading slash
+                    if (fileLink.includes(token)) {
+                         const parts = fileLink.split(token);
+                         if (parts.length > 1) {
+                             relativePath = parts[1]; // Should be /videos/file.mp4
+                         }
+                    }
+
+                    const localUrl = `${baseApiUrl}/file/bot${token}${relativePath}`;
                     
                     const writer = fs.createWriteStream(filePath);
                     const response = await axios({
