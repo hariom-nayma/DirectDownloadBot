@@ -847,6 +847,9 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                     [
                         { text: "📥 Download", url: webContentLink },
                         { text: "👁️ View", url: webViewLink }
+                    ],
+                    [
+                        { text: "🗑️ Delete", callback_data: `del_drive_${res.data.id}` }
                     ]
                 ]
             }
@@ -868,6 +871,49 @@ bot.onText(/\/gdrive_add/, async (msg) => {
             } catch (e) {
                 console.error(`[Cleanup Error] Failed to delete ${filePath}:`, e.message);
             }
+        }
+    }
+});
+
+// Handle Callback Queries (for Delete button)
+bot.on('callback_query', async (callbackQuery) => {
+    const message = callbackQuery.message;
+    const data = callbackQuery.data;
+    const chatId = message.chat.id;
+
+    if (data.startsWith('del_drive_')) {
+        const fileId = data.replace('del_drive_', '');
+        
+        // Authenticate
+        const tokens = getGoogleToken(chatId);
+        if (!tokens) {
+            return bot.answerCallbackQuery(callbackQuery.id, { text: "⚠️ You are not logged in/authorized.", show_alert: true });
+        }
+
+        const oAuth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            'http://localhost:3000/oauth2callback'
+        );
+        oAuth2Client.setCredentials(tokens);
+        const drive = google.drive({ version: 'v3', auth: oAuth2Client });
+
+        try {
+            await drive.files.delete({ fileId: fileId });
+            
+            bot.answerCallbackQuery(callbackQuery.id, { text: "✅ File deleted from Drive." });
+            
+            // Edit message to remove buttons and show deleted status
+            bot.editMessageText(`${message.text || message.caption}\n\n🗑️ *Deleted from Drive*`, {
+                chat_id: chatId,
+                message_id: message.message_id,
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: [] } // Remove buttons
+            }).catch(() => {});
+
+        } catch (error) {
+            console.error("Delete Error:", error);
+            bot.answerCallbackQuery(callbackQuery.id, { text: `❌ Failed to delete: ${error.message}`, show_alert: true });
         }
     }
 });
