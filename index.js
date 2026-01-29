@@ -642,63 +642,83 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                     parse_mode: 'Markdown'
                 });
 
-                // Construct Local URL correctly from Absolute Path
-                // Strategy 1: Relative Path (standard)
-                // Absolute: /var/lib/telegram-bot-api/<token>/videos/file.mp4
-                // Target URL: http://localhost:8081/file/bot<token>/videos/file.mp4
-                
-                let relativePath = fileLink;
-                // Try to extract relative path including the leading slash
-                if (fileLink.includes(token)) {
-                    const parts = fileLink.split(token);
-                    if (parts.length > 1) {
-                        relativePath = parts[1]; // Should be /videos/file.mp4
+                // Helper to get diverse URLs
+                const getUrls = () => {
+                    const urls = [];
+                    // Ensure we have an IPv4 base if localhost is used
+                    const bases = [baseApiUrl];
+                    if (baseApiUrl.includes('localhost')) {
+                         bases.push(baseApiUrl.replace('localhost', '127.0.0.1'));
+                    }
+
+                    // Prepare paths
+                    let relativePath = fileLink;
+                    if (fileLink.includes(token)) {
+                        const parts = fileLink.split(token);
+                        if (parts.length > 1) {
+                            relativePath = parts[1];
+                        }
+                    }
+                    // Clean relative path
+                    let cleanRelative = relativePath;
+                    if (cleanRelative.startsWith('/')) cleanRelative = cleanRelative.substring(1);
+                    if (cleanRelative.startsWith('\\')) cleanRelative = cleanRelative.substring(1);
+
+                    // Strategy 1: Standard Relative (file/bot<token>/videos/file.mp4)
+                    bases.forEach(base => {
+                         urls.push({
+                             url: `${base}/file/bot${token}/${cleanRelative}`,
+                             desc: `Standard Relative (${base})`
+                         });
+                    });
+
+                    // Strategy 2: Absolute Path via detailed endpoint (file/bot<token>/var/lib/...)
+                    bases.forEach(base => {
+                        urls.push({
+                            url: `${base}/file/bot${token}${fileLink}`,
+                            desc: `Absolute via Endpoint (${base})`
+                        });
+                    });
+
+                    // Strategy 3: Direct Absolute Path (No prefix) - /var/lib/...
+                    // Some servers might serve root
+                    bases.forEach(base => {
+                        urls.push({
+                            url: `${base}${fileLink}`,
+                            desc: `Direct Absolute (${base})`
+                        });
+                    });
+
+                    return urls;
+                };
+
+                const strategies = getUrls();
+                let params = null;
+                let success = false;
+
+                for (const strategy of strategies) {
+                    console.log(`[Debug] Trying HTTP Strat: ${strategy.desc} -> ${strategy.url}`);
+                    try {
+                        const response = await axios({
+                            url: strategy.url,
+                            method: 'GET',
+                            responseType: 'stream'
+                        });
+                        // If we get here, it worked
+                        params = response;
+                        success = true;
+                        break;
+                    } catch (e) {
+                         console.error(`[Debug] Failed: ${e.message} (Status: ${e.response ? e.response.status : 'N/A'})`);
+                         // Continue to next strategy
                     }
                 }
 
-                // Remove leading slash to prevent double slash in URL
-                let cleanRelativePath = relativePath;
-                if (cleanRelativePath.startsWith('/')) cleanRelativePath = cleanRelativePath.substring(1);
-                if (cleanRelativePath.startsWith('\\')) cleanRelativePath = cleanRelativePath.substring(1);
-
-                const relativeUrl = `${baseApiUrl}/file/bot${token}/${cleanRelativePath}`;
-                
-                // Strategy 2: Absolute Path (fallback for some local server configs)
-                // URL: http://localhost:8081/file/bot<token>//var/lib/...
-                const absoluteUrl = `${baseApiUrl}/file/bot${token}${fileLink}`;
-
-                console.log(`[Debug] Trying Local HTTP (Strategy 1): ${relativeUrl}`);
-                
-                let response = null;
-                // let usedUrl = relativeUrl;
-
-                try {
-                    response = await axios({
-                        url: relativeUrl,
-                        method: 'GET',
-                        responseType: 'stream'
-                    });
-                } catch (err1) {
-                     console.error(`[Debug] Strategy 1 failed: ${err1.message}`);
-                     if (err1.response && err1.response.status === 404) {
-                         console.log(`[Debug] Trying Local HTTP (Strategy 2): ${absoluteUrl}`);
-                         try {
-                             response = await axios({
-                                 url: absoluteUrl,
-                                 method: 'GET',
-                                 responseType: 'stream'
-                             });
-                             // usedUrl = absoluteUrl;
-                         } catch (err2) {
-                              console.error(`[Debug] Strategy 2 failed: ${err2.message}`);
-                              throw err2; // Throw the last error if both fail
-                         }
-                     } else {
-                         throw err1; // Throw if not 404 (e.g. 500 or network error)
-                     }
+                if (!success || !params) {
+                     throw new Error("All local HTTP download strategies failed. Please check permissions or server config.");
                 }
 
-                // Reuse download progress logic
+                const response = params;
                 const totalLength = response.headers['content-length'];
                 let downloadedLength = 0;
                 response.data.on('data', (chunk) => {
