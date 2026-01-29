@@ -689,6 +689,15 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                         });
                     });
 
+                    // Strategy 4: Relative Path WITHOUT Token (Custom setups)
+                    // URL: http://localhost:8081/file/videos/file.mp4
+                    bases.forEach(base => {
+                        urls.push({
+                            url: `${base}/file/${cleanRelative}`,
+                            desc: `Relative No-Token (${base})`
+                        });
+                    });
+
                     return urls;
                 };
 
@@ -707,6 +716,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                         // If we get here, it worked
                         params = response;
                         success = true;
+                        console.log(`[Debug] Success with Strategy: ${strategy.desc}`);
                         break;
                     } catch (e) {
                          console.error(`[Debug] Failed: ${e.message} (Status: ${e.response ? e.response.status : 'N/A'})`);
@@ -715,7 +725,13 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 }
 
                 if (!success || !params) {
-                     throw new Error("All local HTTP download strategies failed. Please check permissions or server config.");
+                     // Specific feedback if EACCES was the original cause
+                     let msg = "All local HTTP download strategies failed.";
+                     if (copySuccess === false) { // It was a failed copy
+                         msg += "\n\n⚠️ **Permission Issue Detected**\nThe bot could not read the file directly ('Permission Denied'). Please check file permissions on the server.";
+                     }
+                     
+                     throw new Error(msg);
                 }
 
                 const response = params;
