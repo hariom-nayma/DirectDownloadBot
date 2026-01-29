@@ -736,21 +736,26 @@ bot.onText(/\/gdrive_add/, async (msg) => {
 
                 const response = params;
                 // Try header first, fallback to Telegram API file size
-                let totalLength = response.headers['content-length'];
-                if (!totalLength || isNaN(totalLength)) {
-                     totalLength = file.file_size; // Fallback from bot.getFile()
+                // Ensure base 10 parsing and fallback to 0 if all else fails
+                let totalLength = parseInt(response.headers['content-length'], 10);
+                if (isNaN(totalLength) && file && file.file_size) {
+                     totalLength = parseInt(file.file_size, 10);
                 }
-
+                
                 let downloadedLength = 0;
                 response.data.on('data', (chunk) => {
                     downloadedLength += chunk.length;
                     const now = Date.now();
                     if (now - lastUpdateListener > 2000) {
-                        const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
-                        const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
-                        const totalMb = (totalLength / (1024 * 1024)).toFixed(2);
+                        // Safety check to avoid division by zero or NaN
+                        const safeTotal = totalLength || downloadedLength; // Fallback to current if total unknown (shows 100%)
+                        const percentVal = (downloadedLength / safeTotal) * 100;
+                        const percent = percentVal.toFixed(1);
                         
-                        bot.editMessageText(`⬇️ *Downloading (HTTP Local)...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB / ${totalMb} MB`, {
+                        const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
+                        const totalMb = (safeTotal / (1024 * 1024)).toFixed(2);
+                        
+                        bot.editMessageText(`⬇️ *Downloading...*\n\n${generateProgressBar(percentVal)} ${percent}%\n${mb} MB / ${totalMb} MB`, {
                             chat_id: chatId,
                             message_id: statusMsg.message_id,
                             parse_mode: 'Markdown'
@@ -794,9 +799,13 @@ bot.onText(/\/gdrive_add/, async (msg) => {
             onUploadProgress: (evt) => {
                 const now = Date.now();
                 if (now - lastUpdateListener > 2000) { // Update every 2s
-                    const progress = (evt.loaded / evt.total) * 100;
-                    const loadedMB = (evt.loaded / (1024 * 1024)).toFixed(2);
-                    const totalMB = (evt.total / (1024 * 1024)).toFixed(2);
+                    // Use known fileSize if evt.total is unreliable
+                    const total = evt.total || fileSize;
+                    const loaded = evt.loaded;
+                    
+                    const progress = total > 0 ? (loaded / total) * 100 : 0;
+                    const loadedMB = (loaded / (1024 * 1024)).toFixed(2);
+                    const totalMB = (total / (1024 * 1024)).toFixed(2);
 
                     bot.editMessageText(`☁️ *Uploading to Drive...*\n\n${generateProgressBar(progress)} ${Math.round(progress)}%\n${loadedMB} MB / ${totalMB} MB`, {
                         chat_id: chatId,
