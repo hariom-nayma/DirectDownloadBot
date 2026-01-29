@@ -735,7 +735,12 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 }
 
                 const response = params;
-                const totalLength = response.headers['content-length'];
+                // Try header first, fallback to Telegram API file size
+                let totalLength = response.headers['content-length'];
+                if (!totalLength || isNaN(totalLength)) {
+                     totalLength = file.file_size; // Fallback from bot.getFile()
+                }
+
                 let downloadedLength = 0;
                 response.data.on('data', (chunk) => {
                     downloadedLength += chunk.length;
@@ -743,7 +748,9 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                     if (now - lastUpdateListener > 2000) {
                         const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
                         const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
-                        bot.editMessageText(`⬇️ *Downloading (HTTP Local)...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
+                        const totalMb = (totalLength / (1024 * 1024)).toFixed(2);
+                        
+                        bot.editMessageText(`⬇️ *Downloading (HTTP Local)...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB / ${totalMb} MB`, {
                             chat_id: chatId,
                             message_id: statusMsg.message_id,
                             parse_mode: 'Markdown'
@@ -813,18 +820,36 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         // 4. Refetch file to get updated links (sometimes links appear after permission change)
         const finalFile = await drive.files.get({
             fileId: res.data.id,
-            fields: 'webContentLink, webViewLink'
+            fields: 'webContentLink, webViewLink, size'
         });
+
+        // Cleanup
+        fs.unlinkSync(filePath);
 
         // Send Link
         const webContentLink = finalFile.data.webContentLink || res.data.webContentLink || "N/A";
-        const webViewLink = finalFile.data.webViewLink || res.data.webViewLink || "N/A";
+        const webViewLink = finalFile.data.webViewLink || finalFile.data.alternateLink || res.data.webViewLink || "N/A";
+        const finalSize = formatBytes(parseInt(finalFile.data.size || res.data.size || fileSize));
 
-        bot.editMessageText(`✅ *Uploaded to Drive!*\n\n📥 [Direct Link](${webContentLink})\n👁️ [View Link](${webViewLink})`, {
-            chat_id: chatId,
-            message_id: statusMsg.message_id,
+        // Format Detailed Message
+        const caption = `
+✅ *Upload Complete!*
+
+📂 *Name:* \`${fileName}\`
+💾 *Size:* \`${finalSize}\`
+`;
+
+        bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+        bot.sendMessage(chatId, caption, {
             parse_mode: 'Markdown',
-            disable_web_page_preview: true
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: "📥 Download", url: webContentLink },
+                        { text: "👁️ View", url: webViewLink }
+                    ]
+                ]
+            }
         });
 
     } catch (error) {
