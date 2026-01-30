@@ -137,6 +137,37 @@ bot.on('polling_error', (error) => {
 
 // --- Commands ---
 
+bot.onText(/\/help/, (msg) => {
+    const chatId = msg.chat.id;
+    const helpText = `🤖 **DirectLink Bot Commands**
+
+📥 **File Operations:**
+• /link - Reply to any file to get direct download link
+• /gdrive_add - Upload file to Google Drive
+• /check_file - Test if file is compatible
+
+🔗 **Google Drive:**
+• /gdrive - Connect your Google Drive account
+• /gdrive_status - Check connection status
+
+🔧 **Utilities:**
+• /test_api - Test API server connection
+• /bypass <url> - Bypass shortened URLs
+• /plan - View subscription plans
+• /settings - Bot configuration
+
+💡 **Tips:**
+• Upload files directly to bot (don't forward)
+• Use /link for fast direct downloads
+• Files up to 2GB supported with local server
+
+🆘 **Need Help?**
+• /help_upload - File upload guide
+• Contact: @sadsoul_main`;
+
+    bot.sendMessage(chatId, helpText);
+});
+
 bot.onText(/\/start/, (msg) => {
     const text = `
 🌟 *Welcome to DirectLink Bot!* 🌟
@@ -548,9 +579,38 @@ bot.onText(/\/gauth (.+)/, async (msg, match) => {
     }
 });
 
+bot.onText(/\/help_upload/, (msg) => {
+    const chatId = msg.chat.id;
+    const helpText = `📤 **How to Upload Files for Google Drive**
+
+✅ **CORRECT WAY:**
+1. Select the file from your device
+2. Send it directly to this bot
+3. Use /gdrive_add command
+
+❌ **AVOID:**
+• Forwarding files from other chats
+• Using old files (uploaded hours ago)
+
+🔧 **If Upload Fails:**
+1. Download the file to your device
+2. Re-upload it directly to this bot
+3. Try /gdrive_add again
+
+💡 **Pro Tips:**
+• Use /check_file to test compatibility
+• Files up to 2GB are supported
+• Fresh uploads work best
+
+🤖 **Why This Happens:**
+The bot can only access files that were uploaded directly to it after the server started running.`;
+
+    bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+});
+
 bot.onText(/\/check_file/, async (msg) => {
     const chatId = msg.chat.id;
-    
+
     if (!msg.reply_to_message) {
         return bot.sendMessage(chatId, "⚠️ Reply to a file with /check_file to check its compatibility.");
     }
@@ -558,17 +618,17 @@ bot.onText(/\/check_file/, async (msg) => {
     const reply = msg.reply_to_message;
     let fileId, fileName, fileSize;
 
-    if (reply.document) { 
-        fileId = reply.document.file_id; 
-        fileName = reply.document.file_name; 
+    if (reply.document) {
+        fileId = reply.document.file_id;
+        fileName = reply.document.file_name;
         fileSize = reply.document.file_size;
-    } else if (reply.video) { 
-        fileId = reply.video.file_id; 
-        fileName = reply.video.file_name || 'video.mp4'; 
+    } else if (reply.video) {
+        fileId = reply.video.file_id;
+        fileName = reply.video.file_name || 'video.mp4';
         fileSize = reply.video.file_size;
-    } else if (reply.audio) { 
-        fileId = reply.audio.file_id; 
-        fileName = reply.audio.file_name || 'audio.mp3'; 
+    } else if (reply.audio) {
+        fileId = reply.audio.file_id;
+        fileName = reply.audio.file_name || 'audio.mp3';
         fileSize = reply.audio.file_size;
     } else if (reply.photo && reply.photo.length > 0) {
         const photo = reply.photo[reply.photo.length - 1];
@@ -580,7 +640,7 @@ bot.onText(/\/check_file/, async (msg) => {
     if (!fileId) return bot.sendMessage(chatId, "❌ No file found.");
 
     const fileSizeMB = fileSize ? (fileSize / (1024 * 1024)).toFixed(2) : 'Unknown';
-    
+
     // Test if file is accessible
     try {
         const file = await bot.getFile(fileId);
@@ -588,7 +648,7 @@ bot.onText(/\/check_file/, async (msg) => {
     } catch (err) {
         const fileAge = Math.floor(Date.now() / 1000) - extractTimestampFromFileId(fileId);
         const ageHours = Math.floor(fileAge / 3600);
-        
+
         bot.sendMessage(chatId, `❌ **File Not Compatible**\n\nName: ${fileName}\nSize: ${fileSizeMB} MB\nAge: ~${ageHours} hours\nStatus: Not available on local server\n\n**Solution:** Re-upload this file directly to the bot, then try /gdrive_add again.`);
     }
 });
@@ -756,7 +816,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
     const fileIdTimestamp = extractTimestampFromFileId(fileId);
     const currentTime = Math.floor(Date.now() / 1000);
     const fileAge = currentTime - fileIdTimestamp;
-    
+
     if (fileAge > 3600) { // Older than 1 hour
         const ageHours = Math.floor(fileAge / 3600);
         console.log(`[GDrive] Warning: File ID is ${ageHours} hours old - may not be available in local API`);
@@ -1205,57 +1265,83 @@ bot.onText(/\/resume_mega/, async (msg) => {
 
 
 // --- File Link Logic ---
-bot.onText(/\/fileLink/, async (msg) => {
+bot.onText(/\/links/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    bot.sendMessage(chatId, `📋 **Bulk Link Generator**\n\nForward or send multiple files to this chat, then use this command to generate direct links for all recent files.\n\n⏳ Scanning recent messages...`, { parse_mode: 'Markdown' });
+
+    // Get recent messages with files
+    // Note: This is a simplified version - in practice, you'd store file info in a database
+    bot.sendMessage(chatId, `💡 **How to use:**\n\n1. Send/forward files to this chat\n2. Reply to each file with /fileLink\n3. Or use /fileLink on individual files\n\n🔄 **Coming Soon:** Bulk processing of multiple files at once!`, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/\/link/, async (msg) => {
     const chatId = msg.chat.id;
 
     if (!msg.reply_to_message) {
-        return bot.sendMessage(chatId, "⚠️ Please reply to a file with /fileLink to get its direct link.");
+        return bot.sendMessage(chatId, "⚠️ Reply to a file with /link to get its direct download link.");
     }
 
     const reply = msg.reply_to_message;
-    let fileId;
-    let fileSize = 0;
+    let fileId, fileName, fileSize;
 
-    if (reply.document) { fileId = reply.document.file_id; fileSize = reply.document.file_size; }
-    else if (reply.video) { fileId = reply.video.file_id; fileSize = reply.video.file_size; }
-    else if (reply.audio) { fileId = reply.audio.file_id; fileSize = reply.audio.file_size; }
-    else if (reply.voice) { fileId = reply.voice.file_id; fileSize = reply.voice.file_size; }
-    else if (reply.sticker) { fileId = reply.sticker.file_id; fileSize = reply.sticker.file_size; }
+    if (reply.document) {
+        fileId = reply.document.file_id;
+        fileName = reply.document.file_name || 'document';
+        fileSize = reply.document.file_size;
+    }
+    else if (reply.video) {
+        fileId = reply.video.file_id;
+        fileName = reply.video.file_name || 'video.mp4';
+        fileSize = reply.video.file_size;
+    }
+    else if (reply.audio) {
+        fileId = reply.audio.file_id;
+        fileName = reply.audio.file_name || 'audio.mp3';
+        fileSize = reply.audio.file_size;
+    }
     else if (reply.photo && reply.photo.length > 0) {
-        // Get the largest photo
         const photo = reply.photo[reply.photo.length - 1];
         fileId = photo.file_id;
+        fileName = 'photo.jpg';
         fileSize = photo.file_size;
     }
 
     if (!fileId) {
-        return bot.sendMessage(chatId, "⚠️ The replied message does not contain a supported file.");
+        return bot.sendMessage(chatId, "❌ No supported file found.");
     }
 
-    // Debug Message
-    const isLocal = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1');
-    bot.sendMessage(chatId, `🔍 Processing File...\nSize: ${formatBytes(fileSize)}\nAPI: ${isLocal ? 'Local Server' : 'Telegram Cloud'}`);
+    const fileSizeMB = fileSize ? (fileSize / (1024 * 1024)).toFixed(2) : 'Unknown';
+
+    bot.sendMessage(chatId, `🔍 Generating link for ${fileName} (${fileSizeMB} MB)...`);
 
     try {
         const fileLink = await bot.getFileLink(fileId);
-        bot.sendMessage(chatId, `🔗 *Direct Link Generated:*\n\n${fileLink}`, {
-            parse_mode: 'Markdown',
-            disable_web_page_preview: true
-        });
-    } catch (error) {
-        let msgText = `❌ Error generating link: ${error.message}`;
 
-        if (error.message.includes('too big')) {
-            msgText += `\n\n⚠️ *Reason:* The file is too large for the current API server.`;
-            if (!isLocal) {
-                msgText += `\n💡 *Solution:* You are using Telegram Cloud API (20MB limit). You MUST set 'TELEGRAM_API_URL' in .env to your Local API Server to handle large files.`;
-            } else {
-                msgText += `\n💡 *Solution:* Your Local Server is rejecting the file. \n1. Ensure you started the server with the \`--local\` flag (e.g., \`./telegram-bot-api --local ...\`).\n2. Standard Bot API Server limit is ~2GB. For 4GB, you may need a custom build or MTProto.`;
+        bot.sendMessage(chatId, `✅ Direct Download Link Generated:\n\n${fileLink}\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nClick the link above to download directly!`, {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "📥 Download Now", url: fileLink }]
+                ]
             }
-        }
+        });
 
-        bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown' });
+    } catch (error) {
+        console.log(`[Link] Error for ${fileId}: ${error.message}`);
+
+        if (error.message.includes('file_id') || error.message.includes('unavailable')) {
+            bot.sendMessage(chatId, `❌ File not accessible\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nSolution: Re-upload this file directly to the bot, then try /link again.`);
+        } else if (error.message.includes('too big')) {
+            bot.sendMessage(chatId, `❌ File too large\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nThis file exceeds the API limits. Try using a smaller file or check your server configuration.`);
+        } else {
+            bot.sendMessage(chatId, `❌ Link generation failed\n\nError: ${error.message}\n\nTry re-uploading the file directly to this bot.`);
+        }
     }
+});
+
+// Keep the old command for compatibility
+bot.onText(/\/fileLink/, async (msg) => {
+    bot.sendMessage(msg.chat.id, "🔄 Use /link instead (shorter and more reliable)\n\nReply to a file with /link to get its direct download link.");
 });
 
 // --- Bypass Logic ---
