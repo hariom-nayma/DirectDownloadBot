@@ -103,6 +103,28 @@ function generateCaption(template, metadata) {
     return caption.trim();
 }
 
+// Helper function to extract timestamp from Telegram file ID
+function extractTimestampFromFileId(fileId) {
+    try {
+        // Telegram file IDs contain base64-encoded data with timestamps
+        // This is a rough approximation - file IDs are complex structures
+        const parts = fileId.split('AA');
+        if (parts.length > 1) {
+            // Try to extract timestamp-like data from the file ID
+            // This is heuristic and may not be 100% accurate
+            const encoded = parts[1].substring(0, 8);
+            const decoded = Buffer.from(encoded, 'base64');
+            if (decoded.length >= 4) {
+                return decoded.readUInt32BE(0);
+            }
+        }
+    } catch (e) {
+        // If extraction fails, assume current time (recent file)
+        console.log(`[Debug] Could not extract timestamp from file ID: ${e.message}`);
+    }
+    return Math.floor(Date.now() / 1000); // Default to current time
+}
+
 // Ensure the 'downloads' directory exists
 const downloadsDir = path.join(__dirname, 'downloads');
 if (!fs.existsSync(downloadsDir)) {
@@ -526,6 +548,51 @@ bot.onText(/\/gauth (.+)/, async (msg, match) => {
     }
 });
 
+bot.onText(/\/check_file/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    if (!msg.reply_to_message) {
+        return bot.sendMessage(chatId, "⚠️ Reply to a file with /check_file to check its compatibility.");
+    }
+
+    const reply = msg.reply_to_message;
+    let fileId, fileName, fileSize;
+
+    if (reply.document) { 
+        fileId = reply.document.file_id; 
+        fileName = reply.document.file_name; 
+        fileSize = reply.document.file_size;
+    } else if (reply.video) { 
+        fileId = reply.video.file_id; 
+        fileName = reply.video.file_name || 'video.mp4'; 
+        fileSize = reply.video.file_size;
+    } else if (reply.audio) { 
+        fileId = reply.audio.file_id; 
+        fileName = reply.audio.file_name || 'audio.mp3'; 
+        fileSize = reply.audio.file_size;
+    } else if (reply.photo && reply.photo.length > 0) {
+        const photo = reply.photo[reply.photo.length - 1];
+        fileId = photo.file_id;
+        fileName = 'photo.jpg';
+        fileSize = photo.file_size;
+    }
+
+    if (!fileId) return bot.sendMessage(chatId, "❌ No file found.");
+
+    const fileSizeMB = fileSize ? (fileSize / (1024 * 1024)).toFixed(2) : 'Unknown';
+    
+    // Test if file is accessible
+    try {
+        const file = await bot.getFile(fileId);
+        bot.sendMessage(chatId, `✅ **File Compatible**\n\nName: ${fileName}\nSize: ${fileSizeMB} MB\nStatus: Ready for Google Drive upload\n\nUse /gdrive_add to upload this file.`);
+    } catch (err) {
+        const fileAge = Math.floor(Date.now() / 1000) - extractTimestampFromFileId(fileId);
+        const ageHours = Math.floor(fileAge / 3600);
+        
+        bot.sendMessage(chatId, `❌ **File Not Compatible**\n\nName: ${fileName}\nSize: ${fileSizeMB} MB\nAge: ~${ageHours} hours\nStatus: Not available on local server\n\n**Solution:** Re-upload this file directly to the bot, then try /gdrive_add again.`);
+    }
+});
+
 bot.onText(/\/debug_file/, async (msg) => {
     const chatId = msg.chat.id;
 
@@ -684,6 +751,17 @@ bot.onText(/\/gdrive_add/, async (msg) => {
     // Pre-check file size for better error messages
     const fileSizeMB = fileSize ? (fileSize / (1024 * 1024)).toFixed(2) : 'Unknown';
     console.log(`[GDrive] Processing file: ${fileName} (${fileSizeMB} MB)`);
+
+    // Detect potentially old file IDs
+    const fileIdTimestamp = extractTimestampFromFileId(fileId);
+    const currentTime = Math.floor(Date.now() / 1000);
+    const fileAge = currentTime - fileIdTimestamp;
+    
+    if (fileAge > 3600) { // Older than 1 hour
+        const ageHours = Math.floor(fileAge / 3600);
+        console.log(`[GDrive] Warning: File ID is ${ageHours} hours old - may not be available in local API`);
+        bot.sendMessage(chatId, `⚠️ **Old File Detected**\n\nThis file was uploaded ${ageHours} hours ago and may not be available on the local server.\n\nIf upload fails, please re-upload the file directly to this bot.`, { parse_mode: 'Markdown' });
+    }
 
     // Warn about large files upfront
     if (fileSize > 50 * 1024 * 1024) { // 50MB
