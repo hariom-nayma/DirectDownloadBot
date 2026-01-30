@@ -1275,6 +1275,105 @@ bot.onText(/\/links/, async (msg) => {
     bot.sendMessage(chatId, `💡 **How to use:**\n\n1. Send/forward files to this chat\n2. Reply to each file with /fileLink\n3. Or use /fileLink on individual files\n\n🔄 **Coming Soon:** Bulk processing of multiple files at once!`, { parse_mode: 'Markdown' });
 });
 
+bot.onText(/\/check_credentials/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    if (String(msg.from.id) !== String(ADMIN_ID)) {
+        return bot.sendMessage(chatId, "❌ Admin only command");
+    }
+    
+    let credInfo = `🔐 **API Credentials Check**\n\n`;
+    
+    // Check environment variables
+    const apiId = process.env.TELEGRAM_API_ID;
+    const apiHash = process.env.TELEGRAM_API_HASH;
+    const botToken = process.env.BOT_TOKEN;
+    
+    credInfo += `🆔 **API ID:** ${apiId ? `${apiId.substring(0, 3)}***` : '❌ Not Set'}\n`;
+    credInfo += `🔐 **API Hash:** ${apiHash ? `${apiHash.substring(0, 6)}***` : '❌ Not Set'}\n`;
+    credInfo += `🤖 **Bot Token:** ${botToken ? `${botToken.substring(0, 10)}***` : '❌ Not Set'}\n`;
+    credInfo += `🌐 **API URL:** ${baseApiUrl}\n\n`;
+    
+    // Check if running in Docker
+    const isDocker = process.env.container || process.env.DOCKER_CONTAINER;
+    credInfo += `🐳 **Docker:** ${isDocker ? 'Yes' : 'Unknown'}\n\n`;
+    
+    if (!apiId || !apiHash) {
+        credInfo += `⚠️ **Missing Credentials!**\n\n`;
+        credInfo += `Your Docker container needs API credentials.\n\n`;
+        credInfo += `**To fix:**\n`;
+        credInfo += `1. Stop container: \`docker stop telegram-bot-api\`\n`;
+        credInfo += `2. Remove container: \`docker rm telegram-bot-api\`\n`;
+        credInfo += `3. Start with credentials:\n`;
+        credInfo += `\`docker run -d --name telegram-bot-api -p 8081:8081 -e TELEGRAM_API_ID=your_id -e TELEGRAM_API_HASH=your_hash aiogram/telegram-bot-api:latest --local\``;
+    } else {
+        credInfo += `✅ **Credentials Found**\n\n`;
+        credInfo += `Your container has API credentials set.\n`;
+        credInfo += `If files still don't work, the issue is likely:\n`;
+        credInfo += `• Files not uploaded directly to bot\n`;
+        credInfo += `• Missing --local flag\n`;
+        credInfo += `• No persistent storage volume`;
+    }
+    
+    bot.sendMessage(chatId, credInfo);
+});
+
+bot.onText(/\/diagnose/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    let diagInfo = `🔍 **Bot Diagnosis Report**\n\n`;
+    
+    // Check API configuration
+    const isLocal = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1');
+    diagInfo += `🌐 **API Mode:** ${isLocal ? 'Local Server' : 'Cloud API'}\n`;
+    diagInfo += `📡 **API URL:** ${baseApiUrl}\n`;
+    
+    // Check environment variables
+    const hasApiId = process.env.TELEGRAM_API_ID ? 'Set' : 'Missing';
+    const hasApiHash = process.env.TELEGRAM_API_HASH ? 'Set' : 'Missing';
+    diagInfo += `🔑 **API ID:** ${hasApiId}\n`;
+    diagInfo += `🔐 **API Hash:** ${hasApiHash}\n\n`;
+    
+    // Test API connection
+    try {
+        const botInfo = await bot.getMe();
+        diagInfo += `✅ **Bot Connection:** Working\n`;
+        diagInfo += `🤖 **Bot Name:** ${botInfo.first_name}\n`;
+        diagInfo += `🆔 **Bot ID:** ${botInfo.id}\n\n`;
+    } catch (e) {
+        diagInfo += `❌ **Bot Connection:** Failed - ${e.message}\n\n`;
+    }
+    
+    diagInfo += `📋 **Common Issues:**\n`;
+    diagInfo += `• Files forwarded from other chats won't work\n`;
+    diagInfo += `• Files uploaded before bot started won't work\n`;
+    diagInfo += `• Bot session is separate from your personal session\n\n`;
+    
+    diagInfo += `💡 **Solutions:**\n`;
+    diagInfo += `• Upload files directly to this bot\n`;
+    diagInfo += `• Don't forward files from other chats\n`;
+    diagInfo += `• Restart Docker with persistent storage\n`;
+    diagInfo += `• Use /check_docker for Docker diagnosis`;
+    
+    bot.sendMessage(chatId, diagInfo);
+});
+
+bot.onText(/\/check_docker/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    if (String(msg.from.id) !== String(ADMIN_ID)) {
+        return bot.sendMessage(chatId, "❌ Admin only command");
+    }
+    
+    bot.sendMessage(chatId, `🐳 **Docker Diagnosis**\n\nChecking your Docker setup...\n\nRun these commands on your server:\n\n\`docker ps | grep telegram-bot-api\`\n\`docker inspect telegram-bot-api | grep -A 5 "Mounts"\`\n\nThen share the output for analysis.`);
+});
+
+bot.onText(/\/test_upload/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    bot.sendMessage(chatId, `🧪 **File Upload Test**\n\nTo test if your setup works:\n\n1. **Create a small test file** (like a .txt file)\n2. **Upload it directly** to this bot (don't forward)\n3. **Reply to it** with /link\n4. **Check if link works**\n\n📝 **What this tests:**\n• Bot can receive files\n• Local API server recognizes files\n• Link generation works\n• Docker setup is correct\n\n⚠️ **Important:** Don't forward files from other chats - upload fresh files only!`);
+});
+
 bot.onText(/\/link/, async (msg) => {
     const chatId = msg.chat.id;
 
@@ -1318,13 +1417,7 @@ bot.onText(/\/link/, async (msg) => {
     try {
         const fileLink = await bot.getFileLink(fileId);
 
-        bot.sendMessage(chatId, `✅ Direct Download Link Generated:\n\n${fileLink}\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nClick the link above to download directly!`, {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: "📥 Download Now", url: fileLink }]
-                ]
-            }
-        });
+        bot.sendMessage(chatId, `✅ Direct Download Link Generated:\n\n${fileLink}\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nCopy the link above to download directly!`);
 
     } catch (error) {
         console.log(`[Link] Error for ${fileId}: ${error.message}`);
