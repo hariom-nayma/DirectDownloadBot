@@ -559,8 +559,30 @@ bot.onText(/\/gdrive_add/, async (msg) => {
     let filePath = null;
 
     try {
-        // 1. Get File Info
-        const file = await bot.getFile(fileId);
+        // 1. Get File Info (With Fallback)
+        let file;
+        console.log(`[GDrive] Fetching info for File ID: ${fileId}`);
+        try {
+            file = await bot.getFile(fileId);
+        } catch (err) {
+            console.error(`[GDrive] Local API getFile failed for ${fileId}:`, err.message);
+            
+            // Fallback
+            try {
+                console.log("[GDrive] Attempting Cloud API fallback...");
+                const cloudResp = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
+                
+                if (cloudResp.data && cloudResp.data.ok) {
+                    file = cloudResp.data.result;
+                    console.log("[GDrive] Cloud API fallback successful. Path:", file.file_path);
+                } else {
+                    throw new Error(`Cloud API returned nok: ${JSON.stringify(cloudResp.data)}`);
+                }
+            } catch (cloudErr) {
+                const cloudMsg = cloudErr.response ? JSON.stringify(cloudErr.response.data) : cloudErr.message;
+                throw new Error(`Local API failed (${err.message}) AND Cloud API failed: ${cloudMsg}`);
+            }
+        }
         const fileLink = file.file_path;
         filePath = path.join(downloadsDir, `${Date.now()}_${fileName}`);
 
