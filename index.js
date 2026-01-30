@@ -1416,8 +1416,22 @@ bot.onText(/\/link/, async (msg) => {
 
     try {
         const fileLink = await bot.getFileLink(fileId);
+        
+        // Replace localhost with public domain for user-facing links
+        const publicDomain = process.env.PUBLIC_DOWNLOAD_DOMAIN || baseApiUrl;
+        const publicLink = fileLink.replace('http://localhost:8081', publicDomain);
+        
+        console.log(`[Link] SUCCESS: Generated link for ${fileName}`);
+        console.log(`[Link] Internal: ${fileLink}`);
+        console.log(`[Link] Public: ${publicLink}`);
 
-        bot.sendMessage(chatId, `✅ Direct Download Link Generated:\n\n${fileLink}\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nCopy the link above to download directly!`);
+        bot.sendMessage(chatId, `✅ Direct Download Link Generated:\n\n${publicLink}\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nClick the button below or copy the link to download!`, {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "📥 Download Now", url: publicLink }]
+                ]
+            }
+        });
 
     } catch (error) {
         console.log(`[Link] Error for ${fileId}: ${error.message}`);
