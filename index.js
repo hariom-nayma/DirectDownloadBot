@@ -528,7 +528,7 @@ bot.onText(/\/gauth (.+)/, async (msg, match) => {
 
 bot.onText(/\/debug_file/, async (msg) => {
     const chatId = msg.chat.id;
-    
+
     if (!msg.reply_to_message) {
         return bot.sendMessage(chatId, "⚠️ Reply to a file with /debug_file to debug it.");
     }
@@ -536,17 +536,17 @@ bot.onText(/\/debug_file/, async (msg) => {
     const reply = msg.reply_to_message;
     let fileId, fileName, fileSize;
 
-    if (reply.document) { 
-        fileId = reply.document.file_id; 
-        fileName = reply.document.file_name; 
+    if (reply.document) {
+        fileId = reply.document.file_id;
+        fileName = reply.document.file_name;
         fileSize = reply.document.file_size;
-    } else if (reply.video) { 
-        fileId = reply.video.file_id; 
-        fileName = reply.video.file_name || 'video.mp4'; 
+    } else if (reply.video) {
+        fileId = reply.video.file_id;
+        fileName = reply.video.file_name || 'video.mp4';
         fileSize = reply.video.file_size;
-    } else if (reply.audio) { 
-        fileId = reply.audio.file_id; 
-        fileName = reply.audio.file_name || 'audio.mp3'; 
+    } else if (reply.audio) {
+        fileId = reply.audio.file_id;
+        fileName = reply.audio.file_name || 'audio.mp3';
         fileSize = reply.audio.file_size;
     } else if (reply.photo && reply.photo.length > 0) {
         const photo = reply.photo[reply.photo.length - 1];
@@ -558,12 +558,12 @@ bot.onText(/\/debug_file/, async (msg) => {
     if (!fileId) return bot.sendMessage(chatId, "❌ No file found.");
 
     const fileSizeMB = fileSize ? (fileSize / (1024 * 1024)).toFixed(2) : 'Unknown';
-    
+
     let debugInfo = `🔍 **File Debug Info**\n\n`;
-    debugInfo += `📁 **Name:** ${fileName}\n`;
+    debugInfo += `📁 **Name:** ${fileName.length > 30 ? fileName.substring(0, 30) + '...' : fileName}\n`;
     debugInfo += `💾 **Size:** ${fileSizeMB} MB\n`;
-    debugInfo += `🆔 **File ID:** \`${fileId}\`\n`;
-    debugInfo += `🌐 **API URL:** \`${baseApiUrl}\`\n\n`;
+    debugInfo += `🆔 **File ID:** \`${fileId.substring(0, 20)}...\`\n`;
+    debugInfo += `🌐 **API:** Local (${baseApiUrl})\n\n`;
 
     // Test Local API
     try {
@@ -575,7 +575,7 @@ bot.onText(/\/debug_file/, async (msg) => {
     } catch (localErr) {
         debugInfo += `❌ **Local API:** Failed\n`;
         debugInfo += `🚫 **Error:** ${localErr.message}\n\n`;
-        
+
         // Test Cloud API
         try {
             console.log(`[Debug] Testing Cloud API fallback for file: ${fileId}`);
@@ -600,7 +600,7 @@ bot.onText(/\/debug_file/, async (msg) => {
     debugInfo += `• Try re-uploading the file directly to this bot\n`;
     debugInfo += `• Use /test_api to verify API connection`;
 
-    bot.sendMessage(chatId, debugInfo, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, debugInfo);
 });
 
 bot.onText(/\/test_api/, async (msg) => {
