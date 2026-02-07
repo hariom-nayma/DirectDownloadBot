@@ -180,8 +180,13 @@ function resolveLocalFilePath(fileLink) {
             console.log(`[Resolve] tg-data contents: [${list.join(', ')}]`);
             const botFolder = list.find(f => f.includes(token.split(':')[0]));
             if (botFolder) {
-                const subList = fs.readdirSync(path.join(tgDataPath, botFolder));
+                const botPath = path.join(tgDataPath, botFolder);
+                const subList = fs.readdirSync(botPath);
                 console.log(`[Resolve] Inside ${botFolder}: [${subList.join(', ')}]`);
+                if (subList.includes('videos')) {
+                    const videoList = fs.readdirSync(path.join(botPath, 'videos'));
+                    console.log(`[Resolve] Inside videos folder: [${videoList.join(', ')}]`);
+                }
             }
         } catch (e) {
             console.log(`[Resolve] Debug list failed: ${e.message}`);
@@ -940,221 +945,110 @@ bot.onText(/\/gdrive_add/, async (msg) => {
 
         // Check if it's a URL or a Local Path (Local API returns absolute path starting with /)
         let resolvedLocalPath = resolveLocalFilePath(file.file_path);
-        let isLocalPath = !!resolvedLocalPath;
+        let downloadSuccess = false;
 
-        if (!isLocalPath) {
-            // --- URL Download (Cloud API) ---
-            let downloadUrl;
-            if (baseApiUrl.includes('http')) {
-                downloadUrl = `${baseApiUrl}/file/bot${token}/${fileLink}`;
-            } else {
-                downloadUrl = `https://api.telegram.org/file/bot${token}/${fileLink}`;
-            }
-
-            const writer = fs.createWriteStream(filePath);
-            const response = await axios({
-                url: downloadUrl,
-                method: 'GET',
-                responseType: 'stream'
-            });
-
-            const totalLength = response.headers['content-length'];
-            let downloadedLength = 0;
-
-            response.data.on('data', (chunk) => {
-                downloadedLength += chunk.length;
-                const now = Date.now();
-                if (now - lastUpdateListener > 2000) {
-                    const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
-                    const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
-                    bot.editMessageText(`⬇️ *Downloading using HTTP...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
-                        chat_id: chatId,
-                        message_id: statusMsg.message_id,
-                        parse_mode: 'Markdown'
-                    }).catch(() => { });
-                    lastUpdateListener = now;
-                }
-            });
-
-            response.data.pipe(writer);
-
-            await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-            });
-
-        } else {
-            // --- Local Path Copy (Local API Volume Mapped) ---
-            bot.editMessageText("⬇️ *Copying from Local Server...*", {
+        // 1. Try Direct Path Copy first if it's a Local API
+        if (resolvedLocalPath && fs.existsSync(resolvedLocalPath)) {
+            bot.editMessageText("⬇️ *Copying from Local Server (Direct)...*", {
                 chat_id: chatId,
                 message_id: statusMsg.message_id,
                 parse_mode: 'Markdown'
-            });
+            }).catch(() => { });
 
-            // Try Direct Copy
-            let copySuccess = false;
-            if (fs.existsSync(resolvedLocalPath)) {
-                try {
-                    await new Promise((resolve, reject) => {
-                        const r = fs.createReadStream(resolvedLocalPath);
-                        const w = fs.createWriteStream(filePath);
-                        r.pipe(w);
-                        w.on('finish', () => { copySuccess = true; resolve(); });
-                        w.on('error', reject);
-                        r.on('error', reject);
-                    });
-                } catch (e) {
-                    console.error("Direct copy failed, falling back to HTTP:", e.message);
-                }
-            }
-
-            // Fallback: If copy failed or file not found (permissions/mapping issue) -> Download via Local HTTP
-            if (!copySuccess) {
-                bot.editMessageText("⬇️ *Direct Copy Failed. Trying Local HTTP...*", {
-                    chat_id: chatId,
-                    message_id: statusMsg.message_id,
-                    parse_mode: 'Markdown'
-                });
-
-                // Helper to get diverse URLs
-                const getUrls = () => {
-                    const urls = [];
-                    // Ensure we have an IPv4 base if localhost is used
-                    const bases = [baseApiUrl];
-                    if (baseApiUrl.includes('localhost')) {
-                        bases.push(baseApiUrl.replace('localhost', '127.0.0.1'));
-                    }
-
-                    // Prepare paths
-                    let relativePath = fileLink;
-                    if (fileLink.includes(token)) {
-                        const parts = fileLink.split(token);
-                        if (parts.length > 1) {
-                            relativePath = parts[1];
-                        }
-                    }
-                    // Clean relative path
-                    let cleanRelative = relativePath;
-                    if (cleanRelative.startsWith('/')) cleanRelative = cleanRelative.substring(1);
-                    if (cleanRelative.startsWith('\\')) cleanRelative = cleanRelative.substring(1);
-
-                    // Strategy 1: Standard Relative (file/bot<token>/videos/file.mp4)
-                    bases.forEach(base => {
-                        urls.push({
-                            url: `${base}/file/bot${token}/${cleanRelative}`,
-                            desc: `Standard Relative (${base})`
-                        });
-                    });
-
-                    // Strategy 2: Absolute Path via detailed endpoint (file/bot<token>/var/lib/...)
-                    bases.forEach(base => {
-                        urls.push({
-                            url: `${base}/file/bot${token}${fileLink}`,
-                            desc: `Absolute via Endpoint (${base})`
-                        });
-                    });
-
-                    // Strategy 2b: Standard Relative WITHOUT 'bot' prefix (Custom setups)
-                    // URL: http://localhost:8081/file/<token>/videos/file.mp4
-                    bases.forEach(base => {
-                        urls.push({
-                            url: `${base}/file/${token}/${cleanRelative}`,
-                            desc: `Relative No-Bot Prefix (${base})`
-                        });
-                    });
-
-                    // Strategy 3: Direct Absolute Path (No prefix) - /var/lib/...
-                    bases.forEach(base => {
-                        urls.push({
-                            url: `${base}${fileLink}`,
-                            desc: `Direct Absolute (${base})`
-                        });
-                    });
-
-                    // Strategy 4: Relative Path WITHOUT Token (Custom setups)
-                    // URL: http://localhost:8081/file/videos/file.mp4
-                    bases.forEach(base => {
-                        urls.push({
-                            url: `${base}/file/${cleanRelative}`,
-                            desc: `Relative No-Token (${base})`
-                        });
-                    });
-
-                    return urls;
-                };
-
-                const strategies = getUrls();
-                let params = null;
-                let success = false;
-
-                for (const strategy of strategies) {
-                    console.log(`[Debug] Trying HTTP Strat: ${strategy.desc} -> ${strategy.url}`);
-                    try {
-                        const response = await axios({
-                            url: strategy.url,
-                            method: 'GET',
-                            responseType: 'stream'
-                        });
-                        // If we get here, it worked
-                        params = response;
-                        success = true;
-                        console.log(`[Debug] Success with Strategy: ${strategy.desc}`);
-                        break;
-                    } catch (e) {
-                        console.error(`[Debug] Failed: ${e.message} (Status: ${e.response ? e.response.status : 'N/A'})`);
-                        // Continue to next strategy
-                    }
-                }
-
-                if (!success || !params) {
-                    // Specific feedback if EACCES was the original cause
-                    let msg = "All local HTTP download strategies failed.";
-                    if (copySuccess === false) { // It was a failed copy
-                        msg += "\n\n⚠️ **Permission Issue Detected**\nThe bot could not read the file directly ('Permission Denied'). Please check file permissions on the server.";
-                    }
-
-                    throw new Error(msg);
-                }
-
-                const response = params;
-                // Try header first, fallback to Telegram API file size
-                // Ensure base 10 parsing and fallback to 0 if all else fails
-                let totalLength = parseInt(response.headers['content-length'], 10);
-                if (isNaN(totalLength) && file && file.file_size) {
-                    totalLength = parseInt(file.file_size, 10);
-                }
-
-                let downloadedLength = 0;
-                response.data.on('data', (chunk) => {
-                    downloadedLength += chunk.length;
-                    const now = Date.now();
-                    if (now - lastUpdateListener > 2000) {
-                        // Safety check to avoid division by zero or NaN
-                        const safeTotal = totalLength || downloadedLength; // Fallback to current if total unknown (shows 100%)
-                        const percentVal = (downloadedLength / safeTotal) * 100;
-                        const percent = percentVal.toFixed(1);
-
-                        const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
-                        const totalMb = (safeTotal / (1024 * 1024)).toFixed(2);
-
-                        bot.editMessageText(`⬇️ *Downloading...*\n\n${generateProgressBar(percentVal)} ${percent}%\n${mb} MB / ${totalMb} MB`, {
-                            chat_id: chatId,
-                            message_id: statusMsg.message_id,
-                            parse_mode: 'Markdown'
-                        }).catch(() => { });
-                        lastUpdateListener = now;
-                    }
-                });
-
-                const writer = fs.createWriteStream(filePath);
-                response.data.pipe(writer);
-
+            try {
                 await new Promise((resolve, reject) => {
-                    writer.on('finish', resolve);
-                    writer.on('error', reject);
+                    const r = fs.createReadStream(resolvedLocalPath);
+                    const w = fs.createWriteStream(filePath);
+                    r.pipe(w);
+                    w.on('finish', () => { downloadSuccess = true; resolve(); });
+                    w.on('error', reject);
+                    r.on('error', reject);
                 });
+                console.log("[GDrive] Direct copy successful");
+            } catch (e) {
+                console.error("[GDrive] Direct copy failed:", e.message);
             }
         }
+
+        // 2. HTTP Download (If Copy Failed or Not Local Path)
+        if (!downloadSuccess) {
+            const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
+            
+            // Generate URL candidates
+            const urls = [];
+            const bases = [baseApiUrl];
+            if (baseApiUrl.includes('localhost')) bases.push(baseApiUrl.replace('localhost', '127.0.0.1'));
+
+            if (!isLocalAPI) {
+                // Cloud API
+                urls.push({ url: `https://api.telegram.org/file/bot${token}/${fileLink}`, desc: 'Telegram Cloud' });
+            } else {
+                // Local API - Intensive search
+                let cleanRelative = fileLink;
+                if (fileLink.startsWith('/')) cleanRelative = cleanRelative.substring(1);
+                
+                bases.forEach(base => {
+                    urls.push({ url: `${base}/file/bot${token}/${cleanRelative}`, desc: 'Local Standard' });
+                    urls.push({ url: `${base}/file/${token}/${cleanRelative}`, desc: 'Local No-Bot Prefix' });
+                    urls.push({ url: `${base}/file/bot${token}${fileLink}`, desc: 'Local Absolute' });
+                    urls.push({ url: `${base}${fileLink}`, desc: 'Local Direct' });
+                });
+            }
+
+            // Try each URL
+            for (const item of urls) {
+                console.log(`[GDrive] Trying download: ${item.desc} (${item.url})`);
+                try {
+                    const writer = fs.createWriteStream(filePath);
+                    const response = await axios({
+                        url: item.url,
+                        method: 'GET',
+                        responseType: 'stream',
+                        timeout: 10000 // 10s timeout to jump to next candidate if it hangs
+                    });
+
+                    const totalLength = parseInt(response.headers['content-length'] || (file ? file.file_size : 0), 10);
+                    let downloadedLength = 0;
+
+                    response.data.on('data', (chunk) => {
+                        downloadedLength += chunk.length;
+                        const now = Date.now();
+                        if (now - lastUpdateListener > 3000) {
+                            const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
+                            const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
+                            bot.editMessageText(`⬇️ *Downloading from ${item.desc}...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
+                                chat_id: chatId,
+                                message_id: statusMsg.message_id,
+                                parse_mode: 'Markdown'
+                            }).catch(() => { });
+                            lastUpdateListener = now;
+                        }
+                    });
+
+                    response.data.pipe(writer);
+
+                    await new Promise((resolve, reject) => {
+                        writer.on('finish', resolve);
+                        writer.on('error', reject);
+                    });
+
+                    downloadSuccess = true;
+                    console.log(`[GDrive] Downloaded successfully from ${item.desc}`);
+                    break; 
+
+                } catch (e) {
+                    console.log(`[GDrive] Download failed from ${item.desc}: ${e.message}`);
+                    if (fs.existsSync(filePath)) {
+                        try { fs.unlinkSync(filePath); } catch(err) {} 
+                    }
+                }
+            }
+        }
+
+        if (!downloadSuccess) {
+            throw new Error("Could not download file from any source. Please re-upload the file directly to the bot.");
+        }
+
 
         const fileSize = fs.statSync(filePath).size;
         if (fileSize === 0) throw new Error("File downloaded but is empty (0 bytes).");
@@ -1489,7 +1383,17 @@ bot.onText(/\/link/, async (msg) => {
         const internalFilePath = fileInfo.file_path;
         
         // Construct the internal link
-        const internalLink = `${baseApiUrl}/file/bot${token}/${internalFilePath}`;
+        // We try the pattern that the server seems to prefer (no 'bot' prefix)
+        const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1');
+        
+        // Try to construct a link that works with the local server's file serving
+        let internalLink;
+        if (isLocalAPI) {
+            // Most local servers serve files at /file/<token>/<path>
+            internalLink = `${baseApiUrl}/file/${token}/${internalFilePath}`;
+        } else {
+            internalLink = `https://api.telegram.org/file/bot${token}/${internalFilePath}`;
+        }
 
         // Construct the public link
         const publicDomain = process.env.PUBLIC_DOWNLOAD_DOMAIN || baseApiUrl;
@@ -1500,6 +1404,7 @@ bot.onText(/\/link/, async (msg) => {
         
         console.log(`[Link] SUCCESS: Generated link for ${fileName}`);
         if (resolvedPath) console.log(`[Link] Local Path Found: ${resolvedPath}`);
+        console.log(`[Link] Intention: ${internalLink}`);
         console.log(`[Link] Public: ${publicLink}`);
 
         bot.sendMessage(chatId, `✅ Direct Download Link Generated:\n\n${publicLink}\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nClick the button below or copy the link to download!`, {
