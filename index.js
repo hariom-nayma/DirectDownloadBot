@@ -977,10 +977,28 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
         console.log(`[GDrive] Using API: ${isLocalAPI ? 'Local' : 'Cloud'} (${baseApiUrl})`);
 
-        try {
-            file = await bot.getFile(fileId);
-            console.log(`[GDrive] Successfully got file info via ${isLocalAPI ? 'Local' : 'Cloud'} API`);
-        } catch (err) {
+        // Try to get file info with retries for Local API (it might be syncing)
+        let getFileAttempts = isLocalAPI ? 5 : 1;
+        let getFileSuccess = false;
+        let getFileError = null;
+
+        while (getFileAttempts > 0 && !getFileSuccess) {
+            try {
+                file = await bot.getFile(fileId);
+                getFileSuccess = true;
+                console.log(`[GDrive] Successfully got file info via ${isLocalAPI ? 'Local' : 'Cloud'} API`);
+            } catch (err) {
+                getFileError = err;
+                getFileAttempts--;
+                if (getFileAttempts > 0 && isLocalAPI) {
+                    console.log(`[GDrive] Local API getFile failed, retrying in 2s... (${getFileAttempts} left)`);
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            }
+        }
+
+        if (!getFileSuccess) {
+            const err = getFileError;
             console.error(`[GDrive] ${isLocalAPI ? 'Local' : 'Cloud'} API getFile failed for ${fileId}:`, err.message);
 
             // Only try cloud fallback if we were using local API
@@ -1499,7 +1517,30 @@ bot.onText(/\/link/, async (msg) => {
 
     try {
         // Use getFile instead of getFileLink for local API compatibility with large files
-        const fileInfo = await bot.getFile(fileId);
+        // Try with retries for local API registration
+        let fileInfo;
+        let attempts = isLocalAPI ? 5 : 1;
+        let success = false;
+        let lastError = null;
+
+        while (attempts > 0 && !success) {
+            try {
+                fileInfo = await bot.getFile(fileId);
+                success = true;
+            } catch (err) {
+                lastError = err;
+                attempts--;
+                if (attempts > 0 && isLocalAPI) {
+                    console.log(`[Link] Local getFile failed, retrying in 2s... (${attempts} left)`);
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            }
+        }
+
+        if (!success) {
+            throw lastError;
+        }
+
         let internalFilePath = fileInfo.file_path;
         
         // Strip container-side absolute path prefix if present
