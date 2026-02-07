@@ -19,17 +19,16 @@ docker rm $CONTAINER_NAME 2>/dev/null
 # 2. Prepare Data Directory
 echo "Preparing data directory at $DATA_DIR"
 mkdir -p "$DATA_DIR"
-# Force ownership to host user and grant full permissions
+# Force ownership to host user and grant full permissions to start
 sudo chown -R $USER:$USER "$DATA_DIR"
 chmod -R 777 "$DATA_DIR"
 
-# 3. Start the container with explicit user mapping and group-add
-# We add group '0' (root) and use the host UID/GID to bypass EACCES
-echo "Starting $IMAGE as user $(id -u):$(id -g)..."
+# 3. Start the container
+# Note: We run as root (default) because this image needs root to initialize.
+# We will fix permissions on the host AFTER it starts.
+echo "Starting $IMAGE..."
 docker run -d \
   --name $CONTAINER_NAME \
-  --user $(id -u):$(id -g) \
-  --group-add 0 \
   -p $PORT:$PORT \
   -v "$DATA_DIR":/var/lib/telegram-bot-api \
   -e TELEGRAM_API_ID=$API_ID \
@@ -63,8 +62,10 @@ while [ $COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ $READY -eq 1 ]; then
-    # Final check on permissions for the newly created token folders
+    # CRITICAL: Since Docker (root) just created the bot folder, we must unlock it for the bot
+    echo "🔓 Fixing folder permissions for the bot..."
     sudo chmod -R 777 "$DATA_DIR" 2>/dev/null
+    
     echo "✅ Success! PM2 bot can be restarted safely now."
     echo "📋 Logs Tail:"
     docker logs --tail 5 $CONTAINER_NAME

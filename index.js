@@ -178,6 +178,20 @@ function resolveLocalFilePath(file_path) {
         }
     }
 
+    // 4. Global fallback - scan tg-data for the file name
+    console.log(`[Resolve] Strategy 4: Global scan for ${fileName}...`);
+    try {
+        const { execSync } = require('child_process');
+        const findCmd = `find "${tgDataPath}" -name "${fileName}" -type f | head -n 1`;
+        const found = execSync(findCmd).toString().trim();
+        if (found && fs.existsSync(found)) {
+            console.log(`[Resolve] GLOBAL SUCCESS: Found at ${found}`);
+            return found;
+        }
+    } catch (e) {
+        console.log(`[Resolve] Global scan failed: ${e.message}`);
+    }
+
     // Diagnostics
     console.log(`[Resolve] FAILED: Not found in ${candidates.length} candidates`);
     try {
@@ -1046,7 +1060,6 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 // Cloud API
                 urls.push({ url: `https://api.telegram.org/file/bot${token}/${fileLink}`, desc: 'Telegram Cloud' });
             } else {
-                // Local API - Intensive search
                 // Local API - Intensive search
                 const localApiMount = (process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api').replace(/\/$/, '');
                 let cleanRelative = fileLink;
