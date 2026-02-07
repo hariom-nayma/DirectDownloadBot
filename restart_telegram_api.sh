@@ -12,7 +12,7 @@ echo "Starting official Telegram Bot API server..."
 docker run -d \
   --name telegram-bot-api \
   -p 8081:8081 \
-  -v telegram-bot-api-data:/var/lib/telegram-bot-api \
+  -v $(pwd)/tg-data:/var/lib/telegram-bot-api \
   -e TELEGRAM_API_ID=31222358 \
   -e TELEGRAM_API_HASH=0d3d30daabb8403072ab86d3f0a1dc35 \
   telegram-bot-api/telegram-bot-api:latest \
@@ -35,7 +35,7 @@ else
     docker run -d \
       --name telegram-bot-api \
       -p 8081:8081 \
-      -v telegram-bot-api-data:/var/lib/telegram-bot-api \
+      -v $(pwd)/tg-data:/var/lib/telegram-bot-api \
       -e TELEGRAM_API_ID=31222358 \
       -e TELEGRAM_API_HASH=0d3d30daabb8403072ab86d3f0a1dc35 \
       aiogram/telegram-bot-api:latest \

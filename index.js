@@ -878,8 +878,23 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         filePath = path.join(downloadsDir, `${Date.now()}_${fileName}`);
 
         // Check if it's a URL or a Local Path (Local API returns absolute path starting with /)
-        // Cloud API returns relative path (e.g. "videos/file_123.mp4")
-        const isLocalPath = fileLink.startsWith('/') || (fileLink.match(/^[a-zA-Z]:/) !== null);
+        let isLocalPath = fileLink.startsWith('/') || (fileLink.match(/^[a-zA-Z]:/) !== null);
+        let resolvedLocalPath = fileLink;
+
+        // If using Local API with Docker bind mount, translate the path
+        const localApiMount = process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api';
+        if (isLocalPath && fileLink.startsWith(localApiMount)) {
+            const relativePart = fileLink.substring(localApiMount.length);
+            // Construct path to the bind-mounted 'tg-data' folder
+            resolvedLocalPath = path.join(__dirname, 'tg-data', relativePart);
+            console.log(`[GDrive] Resolved Container Path ${fileLink} to Host Path: ${resolvedLocalPath}`);
+
+            // Confirm the file actually exists at the resolved path
+            if (!fs.existsSync(resolvedLocalPath)) {
+                console.log(`[GDrive] Warning: Resolved path does not exist, falling back to original path check`);
+                resolvedLocalPath = fileLink;
+            }
+        }
 
         if (!isLocalPath) {
             // --- URL Download (Cloud API) ---
@@ -932,10 +947,10 @@ bot.onText(/\/gdrive_add/, async (msg) => {
 
             // Try Direct Copy
             let copySuccess = false;
-            if (fs.existsSync(fileLink)) {
+            if (fs.existsSync(resolvedLocalPath)) {
                 try {
                     await new Promise((resolve, reject) => {
-                        const r = fs.createReadStream(fileLink);
+                        const r = fs.createReadStream(resolvedLocalPath);
                         const w = fs.createWriteStream(filePath);
                         r.pipe(w);
                         w.on('finish', () => { copySuccess = true; resolve(); });
@@ -1277,27 +1292,27 @@ bot.onText(/\/links/, async (msg) => {
 
 bot.onText(/\/check_credentials/, async (msg) => {
     const chatId = msg.chat.id;
-    
+
     if (String(msg.from.id) !== String(ADMIN_ID)) {
         return bot.sendMessage(chatId, "❌ Admin only command");
     }
-    
+
     let credInfo = `🔐 **API Credentials Check**\n\n`;
-    
+
     // Check environment variables
     const apiId = process.env.TELEGRAM_API_ID;
     const apiHash = process.env.TELEGRAM_API_HASH;
     const botToken = process.env.BOT_TOKEN;
-    
+
     credInfo += `🆔 **API ID:** ${apiId ? `${apiId.substring(0, 3)}***` : '❌ Not Set'}\n`;
     credInfo += `🔐 **API Hash:** ${apiHash ? `${apiHash.substring(0, 6)}***` : '❌ Not Set'}\n`;
     credInfo += `🤖 **Bot Token:** ${botToken ? `${botToken.substring(0, 10)}***` : '❌ Not Set'}\n`;
     credInfo += `🌐 **API URL:** ${baseApiUrl}\n\n`;
-    
+
     // Check if running in Docker
     const isDocker = process.env.container || process.env.DOCKER_CONTAINER;
     credInfo += `🐳 **Docker:** ${isDocker ? 'Yes' : 'Unknown'}\n\n`;
-    
+
     if (!apiId || !apiHash) {
         credInfo += `⚠️ **Missing Credentials!**\n\n`;
         credInfo += `Your Docker container needs API credentials.\n\n`;
@@ -1314,26 +1329,26 @@ bot.onText(/\/check_credentials/, async (msg) => {
         credInfo += `• Missing --local flag\n`;
         credInfo += `• No persistent storage volume`;
     }
-    
+
     bot.sendMessage(chatId, credInfo);
 });
 
 bot.onText(/\/diagnose/, async (msg) => {
     const chatId = msg.chat.id;
-    
+
     let diagInfo = `🔍 **Bot Diagnosis Report**\n\n`;
-    
+
     // Check API configuration
     const isLocal = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1');
     diagInfo += `🌐 **API Mode:** ${isLocal ? 'Local Server' : 'Cloud API'}\n`;
     diagInfo += `📡 **API URL:** ${baseApiUrl}\n`;
-    
+
     // Check environment variables
     const hasApiId = process.env.TELEGRAM_API_ID ? 'Set' : 'Missing';
     const hasApiHash = process.env.TELEGRAM_API_HASH ? 'Set' : 'Missing';
     diagInfo += `🔑 **API ID:** ${hasApiId}\n`;
     diagInfo += `🔐 **API Hash:** ${hasApiHash}\n\n`;
-    
+
     // Test API connection
     try {
         const botInfo = await bot.getMe();
@@ -1343,34 +1358,34 @@ bot.onText(/\/diagnose/, async (msg) => {
     } catch (e) {
         diagInfo += `❌ **Bot Connection:** Failed - ${e.message}\n\n`;
     }
-    
+
     diagInfo += `📋 **Common Issues:**\n`;
     diagInfo += `• Files forwarded from other chats won't work\n`;
     diagInfo += `• Files uploaded before bot started won't work\n`;
     diagInfo += `• Bot session is separate from your personal session\n\n`;
-    
+
     diagInfo += `💡 **Solutions:**\n`;
     diagInfo += `• Upload files directly to this bot\n`;
     diagInfo += `• Don't forward files from other chats\n`;
     diagInfo += `• Restart Docker with persistent storage\n`;
     diagInfo += `• Use /check_docker for Docker diagnosis`;
-    
+
     bot.sendMessage(chatId, diagInfo);
 });
 
 bot.onText(/\/check_docker/, async (msg) => {
     const chatId = msg.chat.id;
-    
+
     if (String(msg.from.id) !== String(ADMIN_ID)) {
         return bot.sendMessage(chatId, "❌ Admin only command");
     }
-    
+
     bot.sendMessage(chatId, `🐳 **Docker Diagnosis**\n\nChecking your Docker setup...\n\nRun these commands on your server:\n\n\`docker ps | grep telegram-bot-api\`\n\`docker inspect telegram-bot-api | grep -A 5 "Mounts"\`\n\nThen share the output for analysis.`);
 });
 
 bot.onText(/\/test_upload/, async (msg) => {
     const chatId = msg.chat.id;
-    
+
     bot.sendMessage(chatId, `🧪 **File Upload Test**\n\nTo test if your setup works:\n\n1. **Create a small test file** (like a .txt file)\n2. **Upload it directly** to this bot (don't forward)\n3. **Reply to it** with /link\n4. **Check if link works**\n\n📝 **What this tests:**\n• Bot can receive files\n• Local API server recognizes files\n• Link generation works\n• Docker setup is correct\n\n⚠️ **Important:** Don't forward files from other chats - upload fresh files only!`);
 });
 
@@ -1416,11 +1431,11 @@ bot.onText(/\/link/, async (msg) => {
 
     try {
         const fileLink = await bot.getFileLink(fileId);
-        
+
         // Replace localhost with public domain for user-facing links
         const publicDomain = process.env.PUBLIC_DOWNLOAD_DOMAIN || baseApiUrl;
         const publicLink = fileLink.replace('http://localhost:8081', publicDomain);
-        
+
         console.log(`[Link] SUCCESS: Generated link for ${fileName}`);
         console.log(`[Link] Internal: ${fileLink}`);
         console.log(`[Link] Public: ${publicLink}`);
