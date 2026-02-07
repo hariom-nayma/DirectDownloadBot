@@ -196,9 +196,24 @@ function resolveLocalFilePath(file_path) {
     try {
         const rootItems = fs.readdirSync(tgDataPath);
         console.log(`[Resolve] tg-data contents: [${rootItems.join(', ')}]`);
-        if (rootItems.includes(token)) {
-            const tokenItems = fs.readdirSync(path.join(tgDataPath, token));
-            console.log(`[Resolve] Inside token folder: [${tokenItems.join(', ')}]`);
+        
+        // Find folder containing part of the token (the ID part before colon)
+        const tokenId = token.split(':')[0];
+        const botFolder = rootItems.find(f => f.includes(tokenId));
+        
+        if (botFolder) {
+            const botPath = path.join(tgDataPath, botFolder);
+            const tokenItems = fs.readdirSync(botPath);
+            console.log(`[Resolve] Inside bot folder (${botFolder}): [${tokenItems.join(', ')}]`);
+            
+            // Log subfolders too
+            const subs = ['videos', 'photos', 'documents', 'temp'];
+            for (const sub of subs) {
+                const subPath = path.join(botPath, sub);
+                if (fs.existsSync(subPath)) {
+                    console.log(`[Resolve] Inside ${sub}: [${fs.readdirSync(subPath).join(', ')}]`);
+                }
+            }
         }
     } catch (e) {
         console.log(`[Resolve] Diagnostic failed: ${e.message}`);
