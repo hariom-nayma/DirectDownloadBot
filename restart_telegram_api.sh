@@ -19,14 +19,17 @@ docker rm $CONTAINER_NAME 2>/dev/null
 # 2. Prepare Data Directory
 echo "Preparing data directory at $DATA_DIR"
 mkdir -p "$DATA_DIR"
-# Ensure it's writable by all (Docker runs as root inside)
-sudo chmod -R 777 "$DATA_DIR"
+# Force ownership to host user and grant full permissions
+sudo chown -R $USER:$USER "$DATA_DIR"
+chmod -R 777 "$DATA_DIR"
 
-# 3. Start the container
-echo "Starting $IMAGE..."
-# Using explicit flags to ensure credentials and local mode are active
+# 3. Start the container with explicit user mapping and group-add
+# We add group '0' (root) and use the host UID/GID to bypass EACCES
+echo "Starting $IMAGE as user $(id -u):$(id -g)..."
 docker run -d \
   --name $CONTAINER_NAME \
+  --user $(id -u):$(id -g) \
+  --group-add 0 \
   -p $PORT:$PORT \
   -v "$DATA_DIR":/var/lib/telegram-bot-api \
   -e TELEGRAM_API_ID=$API_ID \
@@ -48,7 +51,6 @@ COUNT=0
 READY=0
 
 while [ $COUNT -lt $MAX_RETRIES ]; do
-    # Try a simple getMe to see if the server is up AND knows our bot
     RESPONSE=$(curl -s "http://localhost:$PORT/bot$BOT_TOKEN/getMe")
     if [[ "$RESPONSE" == *"\"ok\":true"* ]]; then
         echo "✅ API Server is READY and Authenticated!"
@@ -61,6 +63,8 @@ while [ $COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ $READY -eq 1 ]; then
+    # Final check on permissions for the newly created token folders
+    sudo chmod -R 777 "$DATA_DIR" 2>/dev/null
     echo "✅ Success! PM2 bot can be restarted safely now."
     echo "📋 Logs Tail:"
     docker logs --tail 5 $CONTAINER_NAME

@@ -135,88 +135,63 @@ if (!fs.existsSync(downloadsDir)) {
 function resolveLocalFilePath(file_path) {
     if (!file_path) return null;
     const tgDataPath = path.join(__dirname, 'tg-data');
-    if (!fs.existsSync(tgDataPath)) return null;
+    if (!fs.existsSync(tgDataPath)) {
+        console.log(`[Resolve] ERROR: tg-data not found at ${tgDataPath}`);
+        return null;
+    }
 
-    // List of candidate base locations for the local files
-    const candidates = [];
-    
-    // Strategy 1: Absolute path from container
+    const localApiMount = (process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api').replace(/\/$/, '');
+    let candidates = [];
+
+    // 1. absolute path from container translation
     if (file_path.startsWith('/')) {
-        const localApiMount = process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api';
         if (file_path.startsWith(localApiMount)) {
-            const relativePart = file_path.substring(localApiMount.length);
-            candidates.push(path.join(tgDataPath, relativePart));
+            const rel = file_path.substring(localApiMount.length);
+            candidates.push(path.join(tgDataPath, rel));
+            candidates.push(path.join(tgDataPath, token, rel));
         }
     }
-    
-    // Strategy 2: Relative candidates
-    candidates.push(path.join(tgDataPath, token, file_path));
-    candidates.push(path.join(tgDataPath, `bot${token}`, file_path));
-    candidates.push(path.join(tgDataPath, file_path));
-    candidates.push(file_path);
 
-    // Strategy 3: Media-specific subfolders (common for forwarded files)
-    const mediaFolders = ['videos', 'photos', 'documents', 'temp', 'voice', 'video_notes'];
+    // 2. Relative candidates
+    candidates.push(path.join(tgDataPath, token, file_path));
+    candidates.push(path.join(tgDataPath, file_path));
+    
+    // 3. Media folder candidates
     const fileName = path.basename(file_path);
+    const mediaFolders = ['videos', 'photos', 'documents', 'temp', 'voice', 'video_notes'];
     mediaFolders.forEach(folder => {
         candidates.push(path.join(tgDataPath, token, folder, fileName));
         candidates.push(path.join(tgDataPath, folder, fileName));
     });
 
-    // Strategy 4: Direct search inside token dir
-    const tokenDir = path.join(tgDataPath, token);
-    if (fs.existsSync(tokenDir)) {
-        try {
-            const subFolders = fs.readdirSync(tokenDir);
-            for (const sub of subFolders) {
-                const subPath = path.join(tokenDir, sub);
-                if (fs.statSync(subPath).isDirectory()) {
-                    candidates.push(path.join(subPath, fileName));
-                }
-            }
-        } catch(e) {}
-    }
+    candidates = [...new Set(candidates.filter(c => c))];
 
-    // Filter and check
-    const uniqueCandidates = [...new Set(candidates.filter(c => c))];
-    for (const cand of uniqueCandidates) {
+    for (const cand of candidates) {
         console.log(`[Resolve] Checking: ${cand}`);
         try {
             if (fs.existsSync(cand)) {
-                console.log(`[Resolve] SUCCESS: Found file at: ${cand}`);
+                console.log(`[Resolve] SUCCESS: Found at ${cand}`);
                 return cand;
             }
         } catch (e) {
-            console.log(`[Resolve] Error checking ${cand}: ${e.message}`);
+            console.log(`[Resolve] Access Error for ${cand}: ${e.message}`);
         }
     }
 
-    // Final Diagnostics
-    console.log(`[Resolve] FAILED: File not found in ${uniqueCandidates.length} candidates`);
+    // Diagnostics
+    console.log(`[Resolve] FAILED: Not found in ${candidates.length} candidates`);
     try {
-        const rootItems = fs.readdirSync(tgDataPath);
-        console.log(`[Resolve] tg-data contents: [${rootItems.join(', ')}]`);
+        const { execSync } = require('child_process');
+        console.log(`[Resolve] Permissions Diagnostic (ls -la tg-data):`);
+        console.log(execSync(`ls -la "${tgDataPath}"`).toString());
         
-        // Find folder containing part of the token (the ID part before colon)
-        const tokenId = token.split(':')[0];
-        const botFolder = rootItems.find(f => f.includes(tokenId));
-        
-        if (botFolder) {
-            const botPath = path.join(tgDataPath, botFolder);
-            const tokenItems = fs.readdirSync(botPath);
-            console.log(`[Resolve] Inside bot folder (${botFolder}): [${tokenItems.join(', ')}]`);
-            
-            // Log subfolders too
-            const subs = ['videos', 'photos', 'documents', 'temp'];
-            for (const sub of subs) {
-                const subPath = path.join(botPath, sub);
-                if (fs.existsSync(subPath)) {
-                    console.log(`[Resolve] Inside ${sub}: [${fs.readdirSync(subPath).join(', ')}]`);
-                }
-            }
+        const tokenDir = path.join(tgDataPath, token);
+        if (fs.existsSync(tokenDir)) {
+             console.log(`[Resolve] Permissions Diagnostic (ls -la token_dir):`);
+             console.log(execSync(`ls -la "${tokenDir}"`).toString());
         }
     } catch (e) {
-        console.log(`[Resolve] Diagnostic failed: ${e.message}`);
+        console.log(`[Resolve] Diagnostic command failed: ${e.message}`);
     }
     return null;
 }
@@ -1072,6 +1047,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 urls.push({ url: `https://api.telegram.org/file/bot${token}/${fileLink}`, desc: 'Telegram Cloud' });
             } else {
                 // Local API - Intensive search
+                // Local API - Intensive search
                 const localApiMount = (process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api').replace(/\/$/, '');
                 let cleanRelative = fileLink;
                 
@@ -1080,44 +1056,38 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                     cleanRelative = cleanRelative.substring(localApiMount.length);
                 }
                 
-                // 2. Strip leading slash
-                if (cleanRelative.startsWith('/')) cleanRelative = cleanRelative.substring(1);
-                
-                // 3. Strip token prefix if present to avoid doubling (Token/Token/...)
-                if (cleanRelative.startsWith(token)) {
+                // 2. Strip Token/botToken prefix if present to avoid doubling
+                const botToken = `bot${token}`;
+                if (cleanRelative.startsWith(`/${token}`)) {
+                    cleanRelative = cleanRelative.substring(token.length + 1);
+                } else if (cleanRelative.startsWith(`/${botToken}`)) {
+                    cleanRelative = cleanRelative.substring(botToken.length + 1);
+                } else if (cleanRelative.startsWith(token)) {
                     cleanRelative = cleanRelative.substring(token.length);
-                } else if (cleanRelative.startsWith(`bot${token}`)) {
-                    cleanRelative = cleanRelative.substring(`bot${token}`.length);
+                } else if (cleanRelative.startsWith(botToken)) {
+                    cleanRelative = cleanRelative.substring(botToken.length);
                 }
-                
-                // 4. Final leading slash cleanup
-                if (cleanRelative.startsWith('/')) cleanRelative = cleanRelative.substring(1);
+
+                // 3. Final cleaning
+                cleanRelative = cleanRelative.replace(/^\/+/, '');
 
                 bases.forEach(base => {
                     const baseUrl = base.endsWith('/') ? base.slice(0, -1) : base;
                     
-                    // 1. Standard pattern (botTOKEN/RELATIVE_PATH)
+                    // Priority Candidate 1: Standard URL (file/botTOKEN/videos/file_0.mkv)
                     urls.push({ url: `${baseUrl}/file/bot${token}/${cleanRelative}`, desc: 'Local Standard' });
                     
-                    // 2. No-bot pattern (TOKEN/RELATIVE_PATH)
+                    // Priority Candidate 2: No-bot URL (file/TOKEN/videos/file_0.mkv)
                     urls.push({ url: `${baseUrl}/file/${token}/${cleanRelative}`, desc: 'Local No-Bot' });
                     
-                    // 3. Absolute path from container (after stripping base mount)
-                    if (fileLink.startsWith(localApiMount)) {
-                        const relativeToMount = fileLink.substring(localApiMount.length).replace(/^\/+/, '');
-                        urls.push({ url: `${baseUrl}/file/bot${token}/${relativeToMount}`, desc: 'Local Full' });
-                    }
-                    
-                    // 4. Token doubled in path (Some servers return /var/lib/tg/TOKEN/TOKEN/videos/...)
-                    if (cleanRelative.includes(token)) {
-                        const afterToken = cleanRelative.split(token).pop().replace(/^\/+/, '');
-                        urls.push({ url: `${baseUrl}/file/bot${token}/${afterToken}`, desc: 'Local AfterToken' });
-                    }
+                    // Priority Candidate 3: Direct URL (videos/file_0.mkv)
+                    urls.push({ url: `${baseUrl}/${cleanRelative}`, desc: 'Local Direct' });
 
-                    // 5. Direct access (No /file/ prefix)
-                    urls.push({ url: `${baseUrl}/bot${token}/${cleanRelative}`, desc: 'Local Direct Bot' });
-                    urls.push({ url: `${baseUrl}/${token}/${cleanRelative}`, desc: 'Local Direct Token' });
-                    urls.push({ url: `${baseUrl}/${cleanRelative}`, desc: 'Local Raw' });
+                    // Priority Candidate 4: Full internal path (e.g. /var/lib/... strip)
+                    if (fileLink.startsWith(localApiMount)) {
+                        const relToMount = fileLink.substring(localApiMount.length).replace(/^\/+/, '');
+                         urls.push({ url: `${baseUrl}/file/bot${token}/${relToMount}`, desc: 'Local Full' });
+                    }
                 });
             }
 
