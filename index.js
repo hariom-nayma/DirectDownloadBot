@@ -291,17 +291,14 @@ bot.onText(/\/help/, (msg) => {
 
 🔧 **Utilities:**
 • /test_api - Test API server connection
-• /bypass <url> - Bypass shortened URLs
-• /plan - View subscription plans
-• /settings - Bot configuration
+• /ls_data - Inspect internal storage (Admin)
 
 💡 **Tips:**
-• Upload files directly to bot (don't forward)
-• Use /link for fast direct downloads
-• Files up to 2GB supported with local server
+• Upload files directly to bot for best speed
+• Forwarded files up to 2GB are supported
+• Use /ls_data if files are not found
 
 🆘 **Need Help?**
-• /help_upload - File upload guide
 • Contact: @sadsoul_main`;
 
     bot.sendMessage(chatId, helpText);
@@ -1080,9 +1077,16 @@ bot.onText(/\/gdrive_add/, async (msg) => {
 
                 bases.forEach(base => {
                     const baseUrl = base.endsWith('/') ? base.slice(0, -1) : base;
+                    // Standard pattern (e.g. /file/botTOKEN/videos/file_0.mp4)
                     urls.push({ url: `${baseUrl}/file/bot${token}/${cleanRelative}`, desc: 'Local Standard' });
-                    urls.push({ url: `${baseUrl}/file/${token}/${cleanRelative}`, desc: 'Local No-Bot Prefix' });
-                    urls.push({ url: `${baseUrl}/file/bot${token}/${cleanRelative}`, desc: 'Local Absolute' });
+                    // No-bot pattern (e.g. /file/TOKEN/videos/file_0.mp4)
+                    urls.push({ url: `${baseUrl}/file/${token}/${cleanRelative}`, desc: 'Local No-Bot' });
+                    // Try the original path if it's already structured for the server
+                    if (fileLink.startsWith(localApiMount)) {
+                        const relativeToMount = fileLink.substring(localApiMount.length).replace(/^\/+/, '');
+                        urls.push({ url: `${baseUrl}/file/bot${token}/${relativeToMount}`, desc: 'Local Full' });
+                    }
+                    // Direct access (e.g. /videos/file_0.mp4)
                     urls.push({ url: `${baseUrl}/${cleanRelative}`, desc: 'Local Direct' });
                 });
             }

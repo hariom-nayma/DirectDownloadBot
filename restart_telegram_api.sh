@@ -1,72 +1,65 @@
 #!/bin/bash
 
-echo "🔄 Trying Official Telegram Bot API Server..."
+# Configuration
+API_ID=31222358
+API_HASH=0d3d30daabb8403072ab86d3f0a1dc35
+PORT=8081
+CONTAINER_NAME="telegram-bot-api"
+IMAGE="aiogram/telegram-bot-api:latest"
+DATA_DIR="$(pwd)/tg-data"
 
-# Stop and remove existing container
-echo "Stopping existing container..."
-docker stop telegram-bot-api 2>/dev/null || echo "No container to stop"
-docker rm telegram-bot-api 2>/dev/null || echo "No container to remove"
+echo "� Restarting Telegram Bot API Server..."
 
-# Try the official Telegram Bot API server
+# 1. Stop and Remove existing container
+echo "Stopping/Removing existing container if it exists..."
+docker stop $CONTAINER_NAME 2>/dev/null
+docker rm $CONTAINER_NAME 2>/dev/null
+
+# 2. Prepare Data Directory
+# Ensure it exists and is writable by everyone since Docker runs as root
+echo "Preparing data directory at $DATA_DIR"
+mkdir -p "$DATA_DIR"
+sudo chmod -R 777 "$DATA_DIR"
+
+# 3. Start the container
+echo "Starting $IMAGE..."
+# We use explicit environment variables AND CLI flags to ensure it picks up the config.
+# Note: We do NOT use --user here because the aiogram entrypoint needs root for initialization.
 docker run -d \
-  --name telegram-bot-api \
-  -p 8081:8081 \
-  -v $(pwd)/tg-data:/var/lib/telegram-bot-api \
-  --user $(id -u):$(id -g) \
-  -e TELEGRAM_API_ID=31222358 \
-  -e TELEGRAM_API_HASH=0d3d30daabb8403072ab86d3f0a1dc35 \
-  aiogram/telegram-bot-api:latest \
+  --name $CONTAINER_NAME \
+  -p $PORT:$PORT \
+  -v "$DATA_DIR":/var/lib/telegram-bot-api \
+  -e TELEGRAM_API_ID=$API_ID \
+  -e TELEGRAM_API_HASH=$API_HASH \
+  -e TELEGRAM_LOCAL=1 \
+  -e TELEGRAM_MAX_DOWNLOAD_FILE_SIZE=2000000000 \
+  -e TELEGRAM_MAX_UPLOAD_FILE_SIZE=2000000000 \
+  $IMAGE \
   telegram-bot-api \
-  --api-id=31222358 \
-  --api-hash=0d3d30daabb8403072ab86d3f0a1dc35 \
+  --api-id=$API_ID \
+  --api-hash=$API_HASH \
   --local \
-  --http-port=8081 \
+  --http-port=$PORT \
   --dir=/var/lib/telegram-bot-api \
   --max-download-file-size=2000000000
 
-# Wait for container to start
-echo "Waiting for container to start..."
+# 4. Wait and Verify
+echo "Waiting for container to start (5s)..."
 sleep 5
 
-# Check if it started successfully
-if docker ps | grep -q telegram-bot-api; then
-    echo "✅ Official container started successfully!"
-else
-    echo "❌ Official container failed, trying aiogram with explicit --local..."
-    
-    # Fallback to aiogram with explicit command
-    docker run -d \
-      --name telegram-bot-api \
-      -p 8081:8081 \
-      -v $(pwd)/tg-data:/var/lib/telegram-bot-api \
-      --user $(id -u):$(id -g) \
-      -e TELEGRAM_API_ID=31222358 \
-      -e TELEGRAM_API_HASH=0d3d30daabb8403072ab86d3f0a1dc35 \
-      aiogram/telegram-bot-api:latest \
-      telegram-bot-api \
-      --api-id=31222358 \
-      --api-hash=0d3d30daabb8403072ab86d3f0a1dc35 \
-      --local \
-      --http-port=8081 \
-      --dir=/var/lib/telegram-bot-api \
-      --max-download-file-size=2000000000
-    
-    sleep 5
-fi
-
-# Final check
-if docker ps | grep -q telegram-bot-api; then
+if docker ps | grep -q $CONTAINER_NAME; then
     echo "✅ Container is running!"
-    echo ""
-    echo "� Container Status:"
-    docker ps | grep telegram-bot-api
-    echo ""
-    echo "📋 Container Logs:"
-    docker logs --tail 15 telegram-bot-api
-    echo ""
-    echo "🧪 Testing API:"
-    curl -s "http://localhost:8081/bot8294062867:AAHShbknrcrBB4bsJsQdMpwQoxq7Ms6jcMM/getMe" | jq .result.first_name || echo "API test failed"
+    echo "📋 Logs:"
+    docker logs --tail 10 $CONTAINER_NAME
+    echo "🧪 Testing API Connection..."
+    # Local API usually responds to /bot<token>/getMe even if not fully configured
+    # We use a known public token check or just curl the port
+    if curl -s "http://localhost:$PORT" > /dev/null; then
+        echo "✅ API Port $PORT is responding!"
+    else
+        echo "⚠️ API Port $PORT is NOT responding yet. Check logs!"
+    fi
 else
-    echo "❌ All attempts failed!"
-    docker logs telegram-bot-api
+    echo "❌ Container FAILED to start. Check logs with: docker logs $CONTAINER_NAME"
+    docker ps -a | grep $CONTAINER_NAME
 fi
