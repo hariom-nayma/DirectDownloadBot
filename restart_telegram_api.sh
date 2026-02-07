@@ -83,7 +83,7 @@ while [ $COUNT -lt $MAX_RETRIES ]; do
     fi
     echo "⌛ Waiting... ($((MAX_RETRIES - COUNT))s left)"
     sleep 1
-    COUNT=$COUNT+1
+    COUNT=$((COUNT + 1))
 done
 
 if [ $READY -eq 1 ]; then
