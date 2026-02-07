@@ -19,13 +19,23 @@ docker rm $CONTAINER_NAME 2>/dev/null
 # 2. Prepare Data Directory
 echo "Preparing data directory at $DATA_DIR"
 mkdir -p "$DATA_DIR"
-# Force ownership to host user and grant full permissions to start
+# Initial ownership fix
 sudo chown -R $USER:$USER "$DATA_DIR"
-chmod -R 777 "$DATA_DIR"
+sudo chmod -R 777 "$DATA_DIR"
 
-# 3. Start the container
-# Note: We run as root (default) because this image needs root to initialize.
-# We will fix permissions on the host AFTER it starts.
+# 3. Apply Default ACLs (Critical Fix)
+# This ensures ANY new file or folder created by Docker (root)
+# within this directory will inherit world-writable/readable permissions.
+echo "🔓 Setting default ACLs for future files..."
+if command -v setfacl &> /dev/null; then
+    sudo setfacl -R -d -m u::rwx,g::rwx,o::rwx "$DATA_DIR"
+    sudo setfacl -R -m u::rwx,g::rwx,o::rwx "$DATA_DIR"
+    echo "✅ ACLs applied successfully."
+else
+    echo "⚠️ setfacl not found. Falling back to persistent chmod loop..."
+fi
+
+# 4. Start the container
 echo "Starting $IMAGE..."
 docker run -d \
   --name $CONTAINER_NAME \
@@ -43,7 +53,7 @@ docker run -d \
   --max-download-file-size=2000000000 \
   --max-upload-file-size=2000000000
 
-# 4. Wait for healthy response
+# 5. Wait for healthy response
 echo "Waiting for API to initialize (max 20s)..."
 MAX_RETRIES=20
 COUNT=0
@@ -62,17 +72,10 @@ while [ $COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ $READY -eq 1 ]; then
-    # CRITICAL: Since Docker (root) just created the bot folder, we must unlock it for the bot
-    echo "🔓 Fixing folder permissions for the bot..."
+    # Final cleanup of any folders created during boot
     sudo chmod -R 777 "$DATA_DIR" 2>/dev/null
-    
     echo "✅ Success! PM2 bot can be restarted safely now."
-    echo "📋 Logs Tail:"
-    docker logs --tail 5 $CONTAINER_NAME
 else
     echo "❌ API Server failed to respond correctly after ${MAX_RETRIES}s."
-    echo "📋 Last response: $RESPONSE"
-    echo "📋 Docker Logs:"
-    docker logs $CONTAINER_NAME
     exit 1
 fi
