@@ -158,6 +158,14 @@ function resolveLocalFilePath(fileLink) {
         // Strategy 3: Relative path
         candidates.push(path.join(tgDataPath, token, fileLink));
         candidates.push(path.join(tgDataPath, `bot${token}`, fileLink));
+        
+        // Aggressive: Check if it's in a subfolder or temp
+        const fileName = path.basename(fileLink);
+        candidates.push(path.join(tgDataPath, token, 'temp', fileName));
+        candidates.push(path.join(tgDataPath, token, 'photos', fileName));
+        candidates.push(path.join(tgDataPath, token, 'videos', fileName));
+        candidates.push(path.join(tgDataPath, token, 'documents', fileName));
+        
         candidates.push(path.join(tgDataPath, fileLink));
     }
     
@@ -187,9 +195,13 @@ function resolveLocalFilePath(fileLink) {
                 const botPath = path.join(tgDataPath, botFolder);
                 const subList = fs.readdirSync(botPath);
                 console.log(`[Resolve] Inside ${botFolder}: [${subList.join(', ')}]`);
-                if (subList.includes('videos')) {
-                    const videoList = fs.readdirSync(path.join(botPath, 'videos'));
-                    console.log(`[Resolve] Inside videos folder: [${videoList.join(', ')}]`);
+                if (subList.includes('photos')) {
+                    const photoList = fs.readdirSync(path.join(botPath, 'photos'));
+                    console.log(`[Resolve] Inside photos folder: [${photoList.join(', ')}]`);
+                }
+                if (subList.includes('temp')) {
+                    const tempList = fs.readdirSync(path.join(botPath, 'temp'));
+                    console.log(`[Resolve] Inside temp folder: [${tempList.join(', ')}]`);
                 }
             }
         } catch (e) {
@@ -1000,53 +1012,65 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 });
             }
 
-            // Try each URL
+            // Try each URL with retries for local API (server might be downloading)
             for (const item of urls) {
                 console.log(`[GDrive] Trying download: ${item.desc} (${item.url})`);
-                try {
-                    const writer = fs.createWriteStream(filePath);
-                    const response = await axios({
-                        url: item.url,
-                        method: 'GET',
-                        responseType: 'stream',
-                        timeout: 10000 // 10s timeout to jump to next candidate if it hangs
-                    });
+                
+                let attempts = isLocalAPI ? 3 : 1;
+                while (attempts > 0) {
+                    try {
+                        const writer = fs.createWriteStream(filePath);
+                        const response = await axios({
+                            url: item.url,
+                            method: 'GET',
+                            responseType: 'stream',
+                            timeout: 15000 
+                        });
 
-                    const totalLength = parseInt(response.headers['content-length'] || (file ? file.file_size : 0), 10);
-                    let downloadedLength = 0;
+                        const totalLength = parseInt(response.headers['content-length'] || (file ? file.file_size : 0), 10);
+                        let downloadedLength = 0;
 
-                    response.data.on('data', (chunk) => {
-                        downloadedLength += chunk.length;
-                        const now = Date.now();
-                        if (now - lastUpdateListener > 3000) {
-                            const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
-                            const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
-                            bot.editMessageText(`⬇️ *Downloading from ${item.desc}...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
-                                chat_id: chatId,
-                                message_id: statusMsg.message_id,
-                                parse_mode: 'Markdown'
-                            }).catch(() => { });
-                            lastUpdateListener = now;
+                        response.data.on('data', (chunk) => {
+                            downloadedLength += chunk.length;
+                            const now = Date.now();
+                            if (now - lastUpdateListener > 3000) {
+                                const percent = totalLength ? ((downloadedLength / totalLength) * 100).toFixed(1) : '0';
+                                const mb = (downloadedLength / (1024 * 1024)).toFixed(2);
+                                bot.editMessageText(`⬇️ *Downloading from ${item.desc}...*\n\n${generateProgressBar(percent)} ${percent}%\n${mb} MB`, {
+                                    chat_id: chatId,
+                                    message_id: statusMsg.message_id,
+                                    parse_mode: 'Markdown'
+                                }).catch(() => { });
+                                lastUpdateListener = now;
+                            }
+                        });
+
+                        response.data.pipe(writer);
+
+                        await new Promise((resolve, reject) => {
+                            writer.on('finish', resolve);
+                            writer.on('error', reject);
+                        });
+
+                        downloadSuccess = true;
+                        console.log(`[GDrive] Downloaded successfully from ${item.desc}`);
+                        break; 
+
+                    } catch (e) {
+                        attempts--;
+                        console.log(`[GDrive] Download failed from ${item.desc} (${attempts} left): ${e.message}`);
+                        if (attempts > 0 && e.message.includes('404')) {
+                            console.log(`[GDrive] 404 on Local API. Waiting 2s for server to download from cloud...`);
+                            await new Promise(r => setTimeout(r, 2000));
+                        } else {
+                            if (fs.existsSync(filePath)) {
+                                try { fs.unlinkSync(filePath); } catch(err) {} 
+                            }
+                            if (attempts === 0) break; // Try next URL
                         }
-                    });
-
-                    response.data.pipe(writer);
-
-                    await new Promise((resolve, reject) => {
-                        writer.on('finish', resolve);
-                        writer.on('error', reject);
-                    });
-
-                    downloadSuccess = true;
-                    console.log(`[GDrive] Downloaded successfully from ${item.desc}`);
-                    break; 
-
-                } catch (e) {
-                    console.log(`[GDrive] Download failed from ${item.desc}: ${e.message}`);
-                    if (fs.existsSync(filePath)) {
-                        try { fs.unlinkSync(filePath); } catch(err) {} 
                     }
                 }
+                if (downloadSuccess) break;
             }
         }
 

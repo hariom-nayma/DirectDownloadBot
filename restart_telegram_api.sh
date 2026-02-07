@@ -19,7 +19,9 @@ docker run -d \
   --api-id=31222358 \
   --api-hash=0d3d30daabb8403072ab86d3f0a1dc35 \
   --local \
-  --http-port=8081
+  --http-port=8081 \
+  --max-download-file-size=2000000000 \
+  --max-webhook-connections=100000
 
 # Wait for container to start
 echo "Waiting for container to start..."
@@ -44,7 +46,9 @@ else
       --api-hash=0d3d30daabb8403072ab86d3f0a1dc35 \
       --local \
       --http-port=8081 \
-      --dir=/var/lib/telegram-bot-api
+      --dir=/var/lib/telegram-bot-api \
+      --max-download-file-size=2000000000 \
+      --max-webhook-connections=100000
     
     sleep 5
 fi
