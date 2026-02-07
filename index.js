@@ -1057,8 +1057,26 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 urls.push({ url: `https://api.telegram.org/file/bot${token}/${fileLink}`, desc: 'Telegram Cloud' });
             } else {
                 // Local API - Intensive search
+                const localApiMount = (process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api').replace(/\/$/, '');
                 let cleanRelative = fileLink;
-                if (fileLink.startsWith('/')) cleanRelative = cleanRelative.substring(1);
+                
+                // 1. Strip container-side absolute path prefix
+                if (cleanRelative.startsWith(localApiMount)) {
+                    cleanRelative = cleanRelative.substring(localApiMount.length);
+                }
+                
+                // 2. Strip leading slash
+                if (cleanRelative.startsWith('/')) cleanRelative = cleanRelative.substring(1);
+                
+                // 3. Strip token prefix if present to avoid doubling (Token/Token/...)
+                if (cleanRelative.startsWith(token)) {
+                    cleanRelative = cleanRelative.substring(token.length);
+                } else if (cleanRelative.startsWith(`bot${token}`)) {
+                    cleanRelative = cleanRelative.substring(`bot${token}`.length);
+                }
+                
+                // 4. Final leading slash cleanup
+                if (cleanRelative.startsWith('/')) cleanRelative = cleanRelative.substring(1);
 
                 bases.forEach(base => {
                     const baseUrl = base.endsWith('/') ? base.slice(0, -1) : base;
@@ -1466,11 +1484,26 @@ bot.onText(/\/link/, async (msg) => {
     try {
         // Use getFile instead of getFileLink for local API compatibility with large files
         const fileInfo = await bot.getFile(fileId);
-        const internalFilePath = fileInfo.file_path;
-
+        let internalFilePath = fileInfo.file_path;
+        
+        // Strip container-side absolute path prefix if present
+        const localApiMount = (process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api').replace(/\/$/, '');
+        if (internalFilePath.startsWith(localApiMount)) {
+            internalFilePath = internalFilePath.substring(localApiMount.length);
+        }
+        if (internalFilePath.startsWith('/')) internalFilePath = internalFilePath.substring(1);
+        
+        // Strip token prefix to avoid doubling
+        if (internalFilePath.startsWith(token)) {
+            internalFilePath = internalFilePath.substring(token.length);
+        } else if (internalFilePath.startsWith(`bot${token}`)) {
+            internalFilePath = internalFilePath.substring(`bot${token}`.length);
+        }
+        if (internalFilePath.startsWith('/')) internalFilePath = internalFilePath.substring(1);
+        
         // Construct the internal link
         // We try the pattern that the server seems to prefer (no 'bot' prefix)
-        const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1');
+        const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
 
         // Try to construct a link that works with the local server's file serving
         let internalLink;
