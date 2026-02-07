@@ -134,15 +134,15 @@ if (!fs.existsSync(downloadsDir)) {
 // Helper to resolve local file paths mapping from Docker
 function resolveLocalFilePath(fileLink) {
     if (!fileLink) return null;
-    
+
     // Check if it's already an absolute path (internal to container)
     let isAbsolute = fileLink.startsWith('/') || (fileLink.match(/^[a-zA-Z]:/) !== null);
-    
+
     const localApiMount = process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api';
     const tgDataPath = path.join(__dirname, 'tg-data');
-    
+
     let candidates = [];
-    
+
     if (isAbsolute) {
         // Strategy 1: Translate container-side absolute path
         if (fileLink.startsWith(localApiMount)) {
@@ -150,7 +150,7 @@ function resolveLocalFilePath(fileLink) {
             candidates.push(path.join(tgDataPath, relativePart));
             // Try with token if it's not already there
             if (!relativePart.includes(token)) {
-                 candidates.push(path.join(tgDataPath, token, relativePart));
+                candidates.push(path.join(tgDataPath, token, relativePart));
             }
         }
         candidates.push(fileLink);
@@ -158,17 +158,17 @@ function resolveLocalFilePath(fileLink) {
         // Strategy 3: Relative path
         candidates.push(path.join(tgDataPath, token, fileLink));
         candidates.push(path.join(tgDataPath, `bot${token}`, fileLink));
-        
+
         // Aggressive: Check if it's in a subfolder or temp
         const fileName = path.basename(fileLink);
         candidates.push(path.join(tgDataPath, token, 'temp', fileName));
         candidates.push(path.join(tgDataPath, token, 'photos', fileName));
         candidates.push(path.join(tgDataPath, token, 'videos', fileName));
         candidates.push(path.join(tgDataPath, token, 'documents', fileName));
-        
+
         candidates.push(path.join(tgDataPath, fileLink));
     }
-    
+
     // Filter duplicates and undefined
     candidates = [...new Set(candidates.filter(c => c))];
 
@@ -183,7 +183,7 @@ function resolveLocalFilePath(fileLink) {
             console.log(`[Resolve] Error checking ${cand}: ${e.message}`);
         }
     }
-    
+
     console.log(`[Resolve] FAILED: File not found in candidates for: ${fileLink}`);
     // Diagnostic log
     if (fs.existsSync(tgDataPath)) {
@@ -198,6 +198,14 @@ function resolveLocalFilePath(fileLink) {
                 if (subList.includes('photos')) {
                     const photoList = fs.readdirSync(path.join(botPath, 'photos'));
                     console.log(`[Resolve] Inside photos folder: [${photoList.join(', ')}]`);
+                }
+                if (subList.includes('videos')) {
+                    const videoList = fs.readdirSync(path.join(botPath, 'videos'));
+                    console.log(`[Resolve] Inside videos folder: [${videoList.join(', ')}]`);
+                }
+                if (subList.includes('documents')) {
+                    const docList = fs.readdirSync(path.join(botPath, 'documents'));
+                    console.log(`[Resolve] Inside documents folder: [${docList.join(', ')}]`);
                 }
                 if (subList.includes('temp')) {
                     const tempList = fs.readdirSync(path.join(botPath, 'temp'));
@@ -215,6 +223,55 @@ function resolveLocalFilePath(fileLink) {
 
 bot.on('polling_error', (error) => {
     console.error(`[polling_error] ${error.code}: ${error.message}`);
+});
+
+// Full diagnostic command for local filesystem
+bot.onText(/\/ls_data/, async (msg) => {
+    const chatId = msg.chat.id;
+    const adminId = process.env.ADMIN_ID;
+
+    if (msg.from.id.toString() !== adminId) {
+        return bot.sendMessage(chatId, "❌ Admin only command.");
+    }
+
+    const tgDataPath = path.join(__dirname, 'tg-data');
+    if (!fs.existsSync(tgDataPath)) {
+        return bot.sendMessage(chatId, `❌ **tg-data folder missing** at:\n\`${tgDataPath}\``, { parse_mode: 'Markdown' });
+    }
+
+    let report = `📂 **Filesystem Diagnostic**\n\n`;
+    report += `📍 **Root:** \`${tgDataPath}\`\n\n`;
+
+    try {
+        const rootItems = fs.readdirSync(tgDataPath);
+        report += `📁 **Contents:**\n${rootItems.map(i => ` - ${i}`).join('\n')}\n\n`;
+
+        const botFolder = rootItems.find(f => f.includes(token.split(':')[0]));
+        if (botFolder) {
+            const botPath = path.join(tgDataPath, botFolder);
+            const subItems = fs.readdirSync(botPath);
+            report += `🤖 **Bot Folder:** \`${botFolder}\`\n`;
+
+            for (const sub of subItems) {
+                if (['photos', 'videos', 'documents', 'temp'].includes(sub)) {
+                    const subPath = path.join(botPath, sub);
+                    const files = fs.readdirSync(subPath);
+                    report += `  └─ 📁 **${sub}:** (${files.length} files)\n`;
+                    if (files.length > 0) {
+                        // Show last 5 files
+                        const lastFiles = files.slice(-5);
+                        report += lastFiles.map(f => `     - \`${f}\``).join('\n') + (files.length > 5 ? '\n     ...and more' : '') + '\n';
+                    }
+                }
+            }
+        } else {
+            report += `⚠️ **No folder matching bot token found** in tg-data.`;
+        }
+    } catch (e) {
+        report += `❌ **Read Error:** ${e.message}`;
+    }
+
+    bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
 });
 
 // --- Commands ---
@@ -989,7 +1046,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         // 2. HTTP Download (If Copy Failed or Not Local Path)
         if (!downloadSuccess) {
             const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
-            
+
             // Generate URL candidates
             const urls = [];
             const bases = [baseApiUrl];
@@ -1002,7 +1059,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 // Local API - Intensive search
                 let cleanRelative = fileLink;
                 if (fileLink.startsWith('/')) cleanRelative = cleanRelative.substring(1);
-                
+
                 bases.forEach(base => {
                     const baseUrl = base.endsWith('/') ? base.slice(0, -1) : base;
                     urls.push({ url: `${baseUrl}/file/bot${token}/${cleanRelative}`, desc: 'Local Standard' });
@@ -1015,7 +1072,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
             // Try each URL with retries for local API (server might be downloading)
             for (const item of urls) {
                 console.log(`[GDrive] Trying download: ${item.desc} (${item.url})`);
-                
+
                 let attempts = isLocalAPI ? 3 : 1;
                 while (attempts > 0) {
                     try {
@@ -1024,7 +1081,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                             url: item.url,
                             method: 'GET',
                             responseType: 'stream',
-                            timeout: 15000 
+                            timeout: 15000
                         });
 
                         const totalLength = parseInt(response.headers['content-length'] || (file ? file.file_size : 0), 10);
@@ -1054,7 +1111,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
 
                         downloadSuccess = true;
                         console.log(`[GDrive] Downloaded successfully from ${item.desc}`);
-                        break; 
+                        break;
 
                     } catch (e) {
                         attempts--;
@@ -1064,7 +1121,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                             await new Promise(r => setTimeout(r, 2000));
                         } else {
                             if (fs.existsSync(filePath)) {
-                                try { fs.unlinkSync(filePath); } catch(err) {} 
+                                try { fs.unlinkSync(filePath); } catch (err) { }
                             }
                             if (attempts === 0) break; // Try next URL
                         }
@@ -1410,11 +1467,11 @@ bot.onText(/\/link/, async (msg) => {
         // Use getFile instead of getFileLink for local API compatibility with large files
         const fileInfo = await bot.getFile(fileId);
         const internalFilePath = fileInfo.file_path;
-        
+
         // Construct the internal link
         // We try the pattern that the server seems to prefer (no 'bot' prefix)
         const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1');
-        
+
         // Try to construct a link that works with the local server's file serving
         let internalLink;
         if (isLocalAPI) {
@@ -1430,7 +1487,7 @@ bot.onText(/\/link/, async (msg) => {
 
         // Check if we can find it locally for better debug logs
         const resolvedPath = resolveLocalFilePath(internalFilePath);
-        
+
         console.log(`[Link] SUCCESS: Generated link for ${fileName}`);
         if (resolvedPath) console.log(`[Link] Local Path Found: ${resolvedPath}`);
         console.log(`[Link] Intention: ${internalLink}`);
