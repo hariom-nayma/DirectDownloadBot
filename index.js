@@ -148,24 +148,47 @@ function resolveLocalFilePath(fileLink) {
         if (fileLink.startsWith(localApiMount)) {
             const relativePart = fileLink.substring(localApiMount.length);
             candidates.push(path.join(tgDataPath, relativePart));
+            // Try with token if it's not already there
+            if (!relativePart.includes(token)) {
+                 candidates.push(path.join(tgDataPath, token, relativePart));
+            }
         }
-        // Strategy 2: Maybe it's already a host path or relative to project
         candidates.push(fileLink);
     } else {
-        // Strategy 3: Relative path (local API usually stores files in <data_dir>/<bot_token>/<file_path>)
-        // Some setups might include the token in the relative part, some might not.
+        // Strategy 3: Relative path
         candidates.push(path.join(tgDataPath, token, fileLink));
+        candidates.push(path.join(tgDataPath, `bot${token}`, fileLink));
         candidates.push(path.join(tgDataPath, fileLink));
     }
     
+    // Filter duplicates and undefined
+    candidates = [...new Set(candidates.filter(c => c))];
+
     for (const cand of candidates) {
+        console.log(`[Resolve] Checking candidate: ${cand}`);
         if (fs.existsSync(cand)) {
             console.log(`[Resolve] SUCCESS: Found file at: ${cand}`);
             return cand;
         }
     }
     
-    console.log(`[Resolve] FAILED: File not found in ${tgDataPath} for link: ${fileLink}`);
+    console.log(`[Resolve] FAILED: File not found in candidates for: ${fileLink}`);
+    // Diagnostic log
+    if (fs.existsSync(tgDataPath)) {
+        try {
+            const list = fs.readdirSync(tgDataPath);
+            console.log(`[Resolve] tg-data contents: [${list.join(', ')}]`);
+            const botFolder = list.find(f => f.includes(token.split(':')[0]));
+            if (botFolder) {
+                const subList = fs.readdirSync(path.join(tgDataPath, botFolder));
+                console.log(`[Resolve] Inside ${botFolder}: [${subList.join(', ')}]`);
+            }
+        } catch (e) {
+            console.log(`[Resolve] Debug list failed: ${e.message}`);
+        }
+    } else {
+        console.log(`[Resolve] tg-data folder missing at: ${tgDataPath}`);
+    }
     return null;
 }
 
@@ -1031,8 +1054,16 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                         });
                     });
 
+                    // Strategy 2b: Standard Relative WITHOUT 'bot' prefix (Custom setups)
+                    // URL: http://localhost:8081/file/<token>/videos/file.mp4
+                    bases.forEach(base => {
+                        urls.push({
+                            url: `${base}/file/${token}/${cleanRelative}`,
+                            desc: `Relative No-Bot Prefix (${base})`
+                        });
+                    });
+
                     // Strategy 3: Direct Absolute Path (No prefix) - /var/lib/...
-                    // Some servers might serve root
                     bases.forEach(base => {
                         urls.push({
                             url: `${base}${fileLink}`,
