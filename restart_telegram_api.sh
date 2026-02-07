@@ -12,16 +12,17 @@ docker run -d \
   --name telegram-bot-api \
   -p 8081:8081 \
   -v $(pwd)/tg-data:/var/lib/telegram-bot-api \
+  --user $(id -u):$(id -g) \
   -e TELEGRAM_API_ID=31222358 \
   -e TELEGRAM_API_HASH=0d3d30daabb8403072ab86d3f0a1dc35 \
-  -e TELEGRAM_LOCAL=1 \
-  -e TELEGRAM_MAX_DOWNLOAD_FILE_SIZE=2000000000 \
-  -e TELEGRAM_MAX_UPLOAD_FILE_SIZE=2000000000 \
-  telegram-bot-api/telegram-bot-api:latest \
+  aiogram/telegram-bot-api:latest \
+  telegram-bot-api \
   --api-id=31222358 \
   --api-hash=0d3d30daabb8403072ab86d3f0a1dc35 \
   --local \
-  --http-port=8081
+  --http-port=8081 \
+  --dir=/var/lib/telegram-bot-api \
+  --max-download-file-size=2000000000
 
 # Wait for container to start
 echo "Waiting for container to start..."
@@ -38,12 +39,17 @@ else
       --name telegram-bot-api \
       -p 8081:8081 \
       -v $(pwd)/tg-data:/var/lib/telegram-bot-api \
+      --user $(id -u):$(id -g) \
       -e TELEGRAM_API_ID=31222358 \
       -e TELEGRAM_API_HASH=0d3d30daabb8403072ab86d3f0a1dc35 \
-      -e TELEGRAM_LOCAL=1 \
-      -e TELEGRAM_MAX_DOWNLOAD_FILE_SIZE=2000000000 \
-      -e TELEGRAM_MAX_UPLOAD_FILE_SIZE=2000000000 \
-      aiogram/telegram-bot-api:latest
+      aiogram/telegram-bot-api:latest \
+      telegram-bot-api \
+      --api-id=31222358 \
+      --api-hash=0d3d30daabb8403072ab86d3f0a1dc35 \
+      --local \
+      --http-port=8081 \
+      --dir=/var/lib/telegram-bot-api \
+      --max-download-file-size=2000000000
     
     sleep 5
 fi
