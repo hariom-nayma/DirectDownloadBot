@@ -8,23 +8,32 @@ CONTAINER_NAME="telegram-bot-api"
 IMAGE="aiogram/telegram-bot-api:latest"
 DATA_DIR="$(pwd)/tg-data"
 
-echo "� Restarting Telegram Bot API Server..."
+echo "🚀 Restarting Telegram Bot API Server..."
 
 # 1. Stop and Remove existing container
 echo "Stopping/Removing existing container if it exists..."
 docker stop $CONTAINER_NAME 2>/dev/null
 docker rm $CONTAINER_NAME 2>/dev/null
 
-# 2. Prepare Data Directory
-# Ensure it exists and is writable by everyone since Docker runs as root
-echo "Preparing data directory at $DATA_DIR"
+# 2. Prepare Data Directory with ACLs
+# This ensures that even if Docker (root) creates a folder, the host user (ubuntu) can read/write it.
+echo "Preparing data directory at $DATA_DIR with ACLs..."
 mkdir -p "$DATA_DIR"
-sudo chmod -R 777 "$DATA_DIR"
+
+# grant current user full access and make it default for new files
+if command -v setfacl &> /dev/null; then
+    echo "Applying ACLs to $DATA_DIR"
+    sudo setfacl -R -m d:u:$(id -u):rwx "$DATA_DIR"
+    sudo setfacl -R -m u:$(id -u):rwx "$DATA_DIR"
+    sudo setfacl -R -m d:o:rwx "$DATA_DIR"
+    sudo setfacl -R -m o:rwx "$DATA_DIR"
+else
+    echo "⚠️ setfacl not found, falling back to chmod 777"
+    sudo chmod -R 777 "$DATA_DIR"
+fi
 
 # 3. Start the container
 echo "Starting $IMAGE..."
-# We use explicit environment variables AND CLI flags to ensure it picks up the config.
-# Note: We do NOT use --user here because the aiogram entrypoint needs root for initialization.
 docker run -d \
   --name $CONTAINER_NAME \
   -p $PORT:$PORT \
@@ -49,11 +58,12 @@ sleep 5
 
 if docker ps | grep -q $CONTAINER_NAME; then
     echo "✅ Container is running!"
+    # One last recursive chmod just in case ACLs failed for existing root-owned folders
+    sudo chmod -R 777 "$DATA_DIR" 2>/dev/null
+    
     echo "📋 Logs:"
     docker logs --tail 10 $CONTAINER_NAME
     echo "🧪 Testing API Connection..."
-    # Local API usually responds to /bot<token>/getMe even if not fully configured
-    # We use a known public token check or just curl the port
     if curl -s "http://localhost:$PORT" > /dev/null; then
         echo "✅ API Port $PORT is responding!"
     else
