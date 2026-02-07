@@ -166,9 +166,13 @@ function resolveLocalFilePath(fileLink) {
 
     for (const cand of candidates) {
         console.log(`[Resolve] Checking candidate: ${cand}`);
-        if (fs.existsSync(cand)) {
-            console.log(`[Resolve] SUCCESS: Found file at: ${cand}`);
-            return cand;
+        try {
+            if (fs.existsSync(cand)) {
+                console.log(`[Resolve] SUCCESS: Found file at: ${cand}`);
+                return cand;
+            }
+        } catch (e) {
+            console.log(`[Resolve] Error checking ${cand}: ${e.message}`);
         }
     }
     
@@ -988,10 +992,11 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 if (fileLink.startsWith('/')) cleanRelative = cleanRelative.substring(1);
                 
                 bases.forEach(base => {
-                    urls.push({ url: `${base}/file/bot${token}/${cleanRelative}`, desc: 'Local Standard' });
-                    urls.push({ url: `${base}/file/${token}/${cleanRelative}`, desc: 'Local No-Bot Prefix' });
-                    urls.push({ url: `${base}/file/bot${token}${fileLink}`, desc: 'Local Absolute' });
-                    urls.push({ url: `${base}${fileLink}`, desc: 'Local Direct' });
+                    const baseUrl = base.endsWith('/') ? base.slice(0, -1) : base;
+                    urls.push({ url: `${baseUrl}/file/bot${token}/${cleanRelative}`, desc: 'Local Standard' });
+                    urls.push({ url: `${baseUrl}/file/${token}/${cleanRelative}`, desc: 'Local No-Bot Prefix' });
+                    urls.push({ url: `${baseUrl}/file/bot${token}/${cleanRelative}`, desc: 'Local Absolute' });
+                    urls.push({ url: `${baseUrl}/${cleanRelative}`, desc: 'Local Direct' });
                 });
             }
 
