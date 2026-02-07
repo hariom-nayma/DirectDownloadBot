@@ -131,6 +131,44 @@ if (!fs.existsSync(downloadsDir)) {
     fs.mkdirSync(downloadsDir);
 }
 
+// Helper to resolve local file paths mapping from Docker
+function resolveLocalFilePath(fileLink) {
+    if (!fileLink) return null;
+    
+    // Check if it's already an absolute path (internal to container)
+    let isAbsolute = fileLink.startsWith('/') || (fileLink.match(/^[a-zA-Z]:/) !== null);
+    
+    const localApiMount = process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api';
+    const tgDataPath = path.join(__dirname, 'tg-data');
+    
+    let candidates = [];
+    
+    if (isAbsolute) {
+        // Strategy 1: Translate container-side absolute path
+        if (fileLink.startsWith(localApiMount)) {
+            const relativePart = fileLink.substring(localApiMount.length);
+            candidates.push(path.join(tgDataPath, relativePart));
+        }
+        // Strategy 2: Maybe it's already a host path or relative to project
+        candidates.push(fileLink);
+    } else {
+        // Strategy 3: Relative path (local API usually stores files in <data_dir>/<bot_token>/<file_path>)
+        // Some setups might include the token in the relative part, some might not.
+        candidates.push(path.join(tgDataPath, token, fileLink));
+        candidates.push(path.join(tgDataPath, fileLink));
+    }
+    
+    for (const cand of candidates) {
+        if (fs.existsSync(cand)) {
+            console.log(`[Resolve] SUCCESS: Found file at: ${cand}`);
+            return cand;
+        }
+    }
+    
+    console.log(`[Resolve] FAILED: File not found in ${tgDataPath} for link: ${fileLink}`);
+    return null;
+}
+
 bot.on('polling_error', (error) => {
     console.error(`[polling_error] ${error.code}: ${error.message}`);
 });
@@ -878,23 +916,8 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         filePath = path.join(downloadsDir, `${Date.now()}_${fileName}`);
 
         // Check if it's a URL or a Local Path (Local API returns absolute path starting with /)
-        let isLocalPath = fileLink.startsWith('/') || (fileLink.match(/^[a-zA-Z]:/) !== null);
-        let resolvedLocalPath = fileLink;
-
-        // If using Local API with Docker bind mount, translate the path
-        const localApiMount = process.env.LOCAL_API_PATH || '/var/lib/telegram-bot-api';
-        if (isLocalPath && fileLink.startsWith(localApiMount)) {
-            const relativePart = fileLink.substring(localApiMount.length);
-            // Construct path to the bind-mounted 'tg-data' folder
-            resolvedLocalPath = path.join(__dirname, 'tg-data', relativePart);
-            console.log(`[GDrive] Resolved Container Path ${fileLink} to Host Path: ${resolvedLocalPath}`);
-
-            // Confirm the file actually exists at the resolved path
-            if (!fs.existsSync(resolvedLocalPath)) {
-                console.log(`[GDrive] Warning: Resolved path does not exist, falling back to original path check`);
-                resolvedLocalPath = fileLink;
-            }
-        }
+        let resolvedLocalPath = resolveLocalFilePath(file.file_path);
+        let isLocalPath = !!resolvedLocalPath;
 
         if (!isLocalPath) {
             // --- URL Download (Cloud API) ---
@@ -1430,14 +1453,22 @@ bot.onText(/\/link/, async (msg) => {
     bot.sendMessage(chatId, `🔍 Generating link for ${fileName} (${fileSizeMB} MB)...`);
 
     try {
-        const fileLink = await bot.getFileLink(fileId);
+        // Use getFile instead of getFileLink for local API compatibility with large files
+        const fileInfo = await bot.getFile(fileId);
+        const internalFilePath = fileInfo.file_path;
+        
+        // Construct the internal link
+        const internalLink = `${baseApiUrl}/file/bot${token}/${internalFilePath}`;
 
-        // Replace localhost with public domain for user-facing links
+        // Construct the public link
         const publicDomain = process.env.PUBLIC_DOWNLOAD_DOMAIN || baseApiUrl;
-        const publicLink = fileLink.replace('http://localhost:8081', publicDomain);
+        const publicLink = internalLink.replace('http://localhost:8081', publicDomain);
 
+        // Check if we can find it locally for better debug logs
+        const resolvedPath = resolveLocalFilePath(internalFilePath);
+        
         console.log(`[Link] SUCCESS: Generated link for ${fileName}`);
-        console.log(`[Link] Internal: ${fileLink}`);
+        if (resolvedPath) console.log(`[Link] Local Path Found: ${resolvedPath}`);
         console.log(`[Link] Public: ${publicLink}`);
 
         bot.sendMessage(chatId, `✅ Direct Download Link Generated:\n\n${publicLink}\n\nFile: ${fileName}\nSize: ${fileSizeMB} MB\n\nClick the button below or copy the link to download!`, {
