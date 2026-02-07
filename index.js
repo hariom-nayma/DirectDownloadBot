@@ -203,6 +203,9 @@ function resolveLocalFilePath(file_path) {
         if (fs.existsSync(tokenDir)) {
              console.log(`[Resolve] Permissions Diagnostic (ls -la token_dir):`);
              console.log(execSync(`ls -la "${tokenDir}"`).toString());
+             
+             console.log(`[Resolve] Recursive scan (ls -R token_dir):`);
+             console.log(execSync(`ls -R "${tokenDir}"`).toString());
         }
     } catch (e) {
         console.log(`[Resolve] Diagnostic command failed: ${e.message}`);
@@ -1086,21 +1089,25 @@ bot.onText(/\/gdrive_add/, async (msg) => {
 
                 bases.forEach(base => {
                     const baseUrl = base.endsWith('/') ? base.slice(0, -1) : base;
+                    const botToken = `bot${token}`;
+
+                    // Standard Candidate
+                    urls.push({ url: `${baseUrl}/file/${botToken}/${cleanRelative}`, desc: 'Local Standard' });
                     
-                    // Priority Candidate 1: Standard URL (file/botTOKEN/videos/file_0.mkv)
-                    urls.push({ url: `${baseUrl}/file/bot${token}/${cleanRelative}`, desc: 'Local Standard' });
-                    
-                    // Priority Candidate 2: No-bot URL (file/TOKEN/videos/file_0.mkv)
+                    // No-bot Candidate
                     urls.push({ url: `${baseUrl}/file/${token}/${cleanRelative}`, desc: 'Local No-Bot' });
                     
-                    // Priority Candidate 3: Direct URL (videos/file_0.mkv)
-                    urls.push({ url: `${baseUrl}/${cleanRelative}`, desc: 'Local Direct' });
+                    // Direct Path (No /file prefix)
+                    urls.push({ url: `${baseUrl}/${botToken}/${cleanRelative}`, desc: 'Local Direct Bot' });
+                    urls.push({ url: `${baseUrl}/${token}/${cleanRelative}`, desc: 'Local Direct ID' });
+                    urls.push({ url: `${baseUrl}/${cleanRelative}`, desc: 'Local Raw' });
 
-                    // Priority Candidate 4: Full internal path (e.g. /var/lib/... strip)
-                    if (fileLink.startsWith(localApiMount)) {
-                        const relToMount = fileLink.substring(localApiMount.length).replace(/^\/+/, '');
-                         urls.push({ url: `${baseUrl}/file/bot${token}/${relToMount}`, desc: 'Local Full' });
-                    }
+                    // Subfolder variations for forwarded files
+                    const fileName = path.basename(cleanRelative);
+                    const subs = ['photos', 'videos', 'documents', 'temp'];
+                    subs.forEach(sub => {
+                        urls.push({ url: `${baseUrl}/file/${botToken}/${sub}/${fileName}`, desc: `Local Sub (${sub})` });
+                    });
                 });
             }
 
