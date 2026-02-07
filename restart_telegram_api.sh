@@ -65,8 +65,8 @@ docker run -d \
   --local \
   --http-port=$PORT \
   --dir=/var/lib/telegram-bot-api \
-  --max-download-file-size=2000000000 \
-  --max-upload-file-size=2000000000
+  --max-download-file-size=4000000000 \
+  --max-upload-file-size=4000000000
 
 # 5. Wait for healthy response
 echo "Waiting for API to initialize (max 20s)..."

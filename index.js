@@ -285,10 +285,11 @@ bot.onText(/\/help/, (msg) => {
 🔧 **Utilities:**
 • /test_api - Test API server connection
 • /ls_data - Inspect internal storage (Admin)
+• /cleardata - Purge all local files (Admin)
 
 💡 **Tips:**
 • Upload files directly to bot for best speed
-• Forwarded files up to 2GB are supported
+• Forwarded files up to 4GB are supported
 • Use /ls_data if files are not found
 
 🆘 **Need Help?**
@@ -306,12 +307,12 @@ Send me any direct download link, and I'll fetch it for you instantly!
 
 ✨ *Features:*
 🎥 Video Detection & Screenshots
-💾 Large File Support (Up to 2GB)
+💾 Large File Support (Up to 4GB)
 ⚡ Ultra-Fast Parallel Processing
 ☁️ Auto-Sync to Telegram Cloud
 
 🔹 *Free Plan:* 3 Downloads/Week, 1GB Max
-💎 *Premium:* Unlimited Downloads, Rename, Custom Thumb, Custom Caption, 2GB Max
+💎 *Premium:* Unlimited Downloads, Rename, Custom Thumb, Custom Caption, 4GB Max
 
 👇 *Type /plan to upgrade!*
     `;
@@ -1286,6 +1287,17 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 console.error(`[Cleanup Error] Failed to delete ${filePath}:`, e.message);
             }
         }
+
+        // Auto-Delete Original Local File (NEW)
+        if (resolvedLocalPath && fs.existsSync(resolvedLocalPath)) {
+            try {
+                fs.unlinkSync(resolvedLocalPath);
+                console.log(`[Cleanup] Auto-deleted original local file: ${resolvedLocalPath}`);
+                bot.sendMessage(chatId, "🧹 *Storage Saved:* Original local file has been auto-deleted after upload.", { parse_mode: 'Markdown' }).catch(() => {});
+            } catch (e) {
+                console.error(`[Cleanup Error] Failed to auto-delete original ${resolvedLocalPath}:`, e.message);
+            }
+        }
     }
 });
 
@@ -1458,6 +1470,28 @@ bot.onText(/\/check_docker/, async (msg) => {
     }
 
     bot.sendMessage(chatId, `🐳 **Docker Diagnosis**\n\nChecking your Docker setup...\n\nRun these commands on your server:\n\n\`docker ps | grep telegram-bot-api\`\n\`docker inspect telegram-bot-api | grep -A 5 "Mounts"\`\n\nThen share the output for analysis.`);
+});
+
+bot.onText(/\/cleardata/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    if (String(msg.from.id) !== String(ADMIN_ID)) {
+        return bot.sendMessage(chatId, "❌ Admin only command");
+    }
+
+    bot.sendMessage(chatId, "🧹 *Purging internal storage...*", { parse_mode: 'Markdown' });
+
+    try {
+        const tgDataPath = path.join(__dirname, 'tg-data');
+        const { execSync } = require('child_process');
+        
+        // Purge everything inside tg-data but keep the folder itself
+        execSync(`sudo rm -rf "${tgDataPath}"/*`);
+        
+        bot.sendMessage(chatId, "✅ **Storage Purged!**\nInternal files have been deleted. Existing download links will no longer work.", { parse_mode: 'Markdown' });
+    } catch (e) {
+        bot.sendMessage(chatId, `❌ **Purge Failed:** ${e.message}`);
+    }
 });
 
 bot.onText(/\/test_upload/, async (msg) => {
