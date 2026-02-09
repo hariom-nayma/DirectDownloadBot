@@ -889,7 +889,7 @@ bot.onText(/\/gdrive_status/, async (msg) => {
     // Check API configuration
     const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
 
-    const statusText = `✅ **Google Drive Status**\n\n🔗 **Connection:** Connected\n🌐 **API Mode:** ${isLocalAPI ? 'Local Server' : 'Cloud API'}\n📡 **API URL:** \`${baseApiUrl}\`\n\n${isLocalAPI ? '✅ Large files supported (up to 2GB)' : '⚠️ Large files limited (20MB max)'}\n\n**Tips:**\n- For files >20MB, ensure you're using a Local Telegram Bot API server\n- If you get "file not found" errors, try re-uploading the file directly to this bot`;
+    const statusText = `✅ **Google Drive Status**\n\n🔗 **Connection:** Connected\n🌐 **API Mode:** ${isLocalAPI ? 'Local Server' : 'Cloud API'}\n📡 **API URL:** \`${baseApiUrl}\`\n\n${isLocalAPI ? '✅ Large files supported (up to 4GB)' : '⚠️ Large files limited (20MB max)'}\n\n**Tips:**\n- For files >20MB, ensure you're using a Local Telegram Bot API server\n- If you get "file not found" errors, try re-uploading the file directly to this bot`;
 
     bot.sendMessage(chatId, statusText, { parse_mode: 'Markdown' });
 });
@@ -959,10 +959,12 @@ bot.onText(/\/gdrive_add/, async (msg) => {
     }
 
     let lastUpdateListener = 0;
-    let statusMsg = await bot.sendMessage(chatId, "⏳ *Downloading from Telegram...*", { parse_mode: 'Markdown' });
     let filePath = null;
-
+    let resolvedLocalPath = null;
+    let statusMsg = null;
+    
     try {
+        statusMsg = await bot.sendMessage(chatId, "⏳ *Downloading from Telegram...*", { parse_mode: 'Markdown' });
         // 1. Get File Info (With Fallback)
         let file;
         console.log(`[GDrive] Fetching info for File ID: ${fileId} (Size: ${fileSizeMB} MB)`);
@@ -971,8 +973,8 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
         console.log(`[GDrive] Using API: ${isLocalAPI ? 'Local' : 'Cloud'} (${baseApiUrl})`);
 
-        // Try to get file info with retries for Local API (it might be syncing)
-        let getFileAttempts = isLocalAPI ? 5 : 1;
+        // Try to get file info with retries for Local API (Large files can take 30-60s to sync)
+        let getFileAttempts = isLocalAPI ? 30 : 1;
         let getFileSuccess = false;
         let getFileError = null;
 
@@ -1026,7 +1028,7 @@ bot.onText(/\/gdrive_add/, async (msg) => {
         filePath = path.join(downloadsDir, `${Date.now()}_${fileName}`);
 
         // Check if it's a URL or a Local Path (Local API returns absolute path starting with /)
-        let resolvedLocalPath = resolveLocalFilePath(file.file_path);
+        resolvedLocalPath = resolveLocalFilePath(file.file_path);
         let downloadSuccess = false;
 
         // 1. Try Direct Path Copy first if it's a Local API
@@ -1544,7 +1546,7 @@ bot.onText(/\/link/, async (msg) => {
         // Use getFile instead of getFileLink for local API compatibility with large files
         // Try with retries for local API registration
         let fileInfo;
-        let attempts = isLocalAPI ? 5 : 1;
+        let attempts = isLocalAPI ? 30 : 1;
         let success = false;
         let lastError = null;
 
