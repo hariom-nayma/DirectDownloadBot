@@ -1608,7 +1608,7 @@ bot.onText(/\/link/, async (msg) => {
 
         // Construct the public link
         const publicDomain = process.env.PUBLIC_DOWNLOAD_DOMAIN || baseApiUrl;
-        const publicLink = internalLink.replace('http://localhost:8081', publicDomain);
+        const publicLink = internalLink.replace(baseApiUrl, publicDomain);
 
         // Check if we can find it locally for better debug logs
         const resolvedPath = resolveLocalFilePath(internalFilePath);
