@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const url = require('url');
 const os = require('os');
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 
 // Replace 'YOUR_TELEGRAM_BOT_TOKEN' with your actual bot token
 // You can also set it via environment variable: process.env.BOT_TOKEN
@@ -1297,7 +1297,14 @@ bot.onText(/\/gdrive_add/, async (msg) => {
                 console.log(`[Cleanup] Auto-deleted original local file: ${resolvedLocalPath}`);
                 bot.sendMessage(chatId, "🧹 *Storage Saved:* Original local file has been auto-deleted after upload.", { parse_mode: 'Markdown' }).catch(() => {});
             } catch (e) {
-                console.error(`[Cleanup Error] Failed to auto-delete original ${resolvedLocalPath}:`, e.message);
+                console.warn(`[Cleanup Warn] unlink failed for ${resolvedLocalPath}: ${e.message}. Using sudo rm fallback...`);
+                try {
+                    execSync(`sudo rm -f "${resolvedLocalPath}"`);
+                    console.log(`[Cleanup] Sudo rm successful for: ${resolvedLocalPath}`);
+                    bot.sendMessage(chatId, "🧹 *Storage Saved:* Original local file has been auto-deleted (via sudo).", { parse_mode: 'Markdown' }).catch(() => {});
+                } catch (sudoErr) {
+                    console.error(`[Cleanup Error] Failed to auto-delete original ${resolvedLocalPath} even with sudo:`, sudoErr.message);
+                }
             }
         }
     }
@@ -1540,6 +1547,9 @@ bot.onText(/\/link/, async (msg) => {
 
     const fileSizeMB = fileSize ? (fileSize / (1024 * 1024)).toFixed(2) : 'Unknown';
 
+    // Construct the internal link
+    const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
+
     bot.sendMessage(chatId, `🔍 Generating link for ${fileName} (${fileSizeMB} MB)...`);
 
     try {
@@ -1585,9 +1595,7 @@ bot.onText(/\/link/, async (msg) => {
         }
         if (internalFilePath.startsWith('/')) internalFilePath = internalFilePath.substring(1);
         
-        // Construct the internal link
-        // We try the pattern that the server seems to prefer (no 'bot' prefix)
-        const isLocalAPI = baseApiUrl.includes('localhost') || baseApiUrl.includes('127.0.0.1') || !baseApiUrl.includes('api.telegram.org');
+        // Try to construct a link that works with the local server's file serving
 
         // Try to construct a link that works with the local server's file serving
         let internalLink;
